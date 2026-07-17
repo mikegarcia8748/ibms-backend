@@ -1,0 +1,78 @@
+package com.puregoldbe.ibms.application.usecase
+
+import com.puregoldbe.ibms.domain.error.DomainError
+import com.puregoldbe.ibms.domain.model.Account
+import com.puregoldbe.ibms.domain.model.AccountStatus
+import com.puregoldbe.ibms.domain.model.AccountUpsertRequest
+import com.puregoldbe.ibms.domain.port.AccountRepository
+import com.puregoldbe.ibms.domain.port.AttachmentRepository
+import com.puregoldbe.ibms.domain.port.Clock
+import com.puregoldbe.ibms.domain.port.StoreRepository
+import com.puregoldbe.ibms.domain.port.TransactionRunner
+import com.puregoldbe.ibms.domain.port.TransferRepository
+
+/**
+ * Relocates a circuit to a new store. Transactionally: mark the old account
+ * `transferred` (which frees the partial unique index), create a new active account
+ * at the new store carrying the same details, and record the transfer. The new
+ * account has a distinct id, so it can still be billed in the current period.
+ */
+class TransferAccountUseCase(
+    private val accounts: AccountRepository,
+    private val stores: StoreRepository,
+    private val transfers: TransferRepository,
+    private val attachments: AttachmentRepository,
+    private val clock: Clock,
+    private val tx: TransactionRunner,
+) {
+    suspend operator fun invoke(accountId: String, newStoreId: String, proofId: String, actorId: String?): Account =
+        tx.inTransaction {
+            val actor = actorId ?: throw DomainError.Unauthorized("authentication required")
+            val old = accounts.findById(accountId) ?: throw DomainError.NotFound("account $accountId not found")
+            if (old.status == AccountStatus.TRANSFERRED) {
+                throw DomainError.Conflict("account $accountId has already been transferred")
+            }
+            stores.findById(newStoreId) ?: throw DomainError.Validation("unknown newStoreId $newStoreId")
+            if (!attachments.exists(proofId)) throw DomainError.Validation("a valid transfer proofId is required")
+
+            accounts.updateStatus(old.id, AccountStatus.TRANSFERRED)
+            val moved = accounts.create(
+                AccountUpsertRequest(
+                    accountNumber = old.accountNumber,
+                    circuitId = old.circuitId,
+                    providerId = old.providerId,
+                    storeId = newStoreId,
+                    planName = old.planName,
+                    serviceType = old.serviceType,
+                    speed = old.speed,
+                    contractDurationMonths = old.contractDurationMonths,
+                    contractStartDate = old.contractStartDate,
+                    contractEndDate = old.contractEndDate,
+                    notes = old.notes,
+                    installationFee = old.installationFee,
+                    rate = old.rate,
+                    installationDate = old.installationDate,
+                    billingPeriodLabel = old.billingPeriodLabel,
+                    subscriptionProofIds = old.subscriptionProofIds,
+                ),
+                createdBy = actor,
+            )
+            transfers.create(old.storeId, newStoreId, old.id, moved.id, proofId, actor, clock.now())
+            moved
+        }
+}
+
+/** Requests deactivation: status -> termination_requested and start the 30-day grace. */
+class DeactivateAccountUseCase(
+    private val accounts: AccountRepository,
+    private val attachments: AttachmentRepository,
+    private val clock: Clock,
+    private val tx: TransactionRunner,
+) {
+    suspend operator fun invoke(accountId: String, proofId: String, actorId: String?): Account = tx.inTransaction {
+        accounts.findById(accountId) ?: throw DomainError.NotFound("account $accountId not found")
+        if (!attachments.exists(proofId)) throw DomainError.Validation("a valid deactivation proofId is required")
+        accounts.markTerminationRequested(accountId, clock.now())
+            ?: throw DomainError.NotFound("account $accountId not found")
+    }
+}

@@ -1,0 +1,20 @@
+services:
+  db:
+    image: postgres:16
+    container_name: ibms-postgres
+    environment:
+      POSTGRES_DB: ibms
+      POSTGRES_USER: ibms
+      POSTGRES_PASSWORD: ibms
+    ports:
+      - "5432:5432"
+    volumes:
+      - ibms-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ibms -d ibms"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  ibms-pgdata:

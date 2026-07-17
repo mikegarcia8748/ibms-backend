@@ -1,45 +1,74 @@
-# ibms-backend
+# IBMS Backend
 
-This project was created using the [Ktor Project Generator](https://start.ktor.io).
+Authoritative backend for the ISP Billing Management System — **Ktor + PostgreSQL**,
+replacing the former React-app-writes-directly-to-Firestore model. PostgreSQL is the
+single source of truth; all CRUD, billing math, invoice sequencing, the 30-day grace
+logic, and Excel export run server-side behind a role-guarded API.
 
-Here are some useful links to get you started:
+Built with **Amper** (the `./kotlin` wrapper), Kotlin 2.4, Ktor 3.1, Exposed (JDBC),
+Flyway, HikariCP. Tests use Kotest + MockK + Testcontainers.
 
-* [Ktor Documentation](https://ktor.io/docs/home.html)
-* [Ktor GitHub page](https://github.com/ktorio/ktor)
-* [Ktor Slack chat](https://app.slack.com/client/T09229ZC6/C0A974TJ9). [Request an invite](https://surveys.jetbrains.com/s3/kotlin-slack-sign-up).
-
-## Features
-
-Here's a list of features included in this project:
-
-| Name                                                                                  | Description                                                                        |
-|---------------------------------------------------------------------------------------|------------------------------------------------------------------------------------|
-| [Koin](https://start.ktor.io/p/io.insert-koin/server-koin)                            | Provides dependency injection                                                      |
-| [Content Negotiation](https://start.ktor.io/p/io.ktor/server-content-negotiation)     | Provides automatic content conversion according to Content-Type and Accept headers |
-| [kotlinx.serialization](https://start.ktor.io/p/io.ktor/server-kotlinx-serialization) | Handles JSON serialization using kotlinx.serialization library                     |
-| [PostgreSQL](https://start.ktor.io/p/org.jetbrains/server-postgres)                   | Adds Postgres database support                                                     |
-| [OpenAPI](https://start.ktor.io/p/io.ktor/server-openapi)                             | Serves OpenAPI documentation                                                       |
-| [Swagger](https://start.ktor.io/p/io.ktor/server-swagger)                             | Serves Swagger UI for your project                                                 |
-| [Authentication](https://start.ktor.io/p/io.ktor/server-auth)                         | Provides extension point for handling the Authorization header                     |
-| [Authentication JWT](https://start.ktor.io/p/io.ktor/server-auth-jwt)                 | Handles JSON Web Token (JWT) bearer authentication scheme                          |
-| [Sessions](https://start.ktor.io/p/io.ktor/server-sessions)                           | Adds support for persistent sessions through cookies or headers                    |
-| [Call Logging](https://start.ktor.io/p/io.ktor/server-call-logging)                   | Logs client requests                                                               |
-| [Micrometer Metrics](https://start.ktor.io/p/io.ktor/server-metrics-micrometer)       | Enables Micrometer metrics in your Ktor server application.                        |
-| [Exposed](https://start.ktor.io/p/org.jetbrains/server-exposed)                       | Adds Exposed database to your application                                          |
-
-## Building & Running
-
-To build or run the project, use one of the following tasks:
-
-| Task             | Description       |
-|------------------|-------------------|
-| `./kotlin test`  | Run the tests     |
-| `./kotlin build` | Build the project |
-| `./kotlin run`   | Run the server    |
-
-If the server starts successfully, you'll see the following output:
+## Architecture (Clean Architecture)
 
 ```
-2024-12-04 14:32:45.584 [main] INFO  Application - Application started in 0.303 seconds.
-2024-12-04 14:32:45.682 [main] INFO  Application - Responding at http://0.0.0.0:8080
+infrastructure/   Ktor wiring, config, Flyway/Hikari, composition root (Bootstrap)
+      ▼ depends on
+adapter/          controllers (Ktor) · Exposed repositories · gateways · JWT/RBAC security
+      ▼
+application/      use cases (interactors) — one per business operation
+      ▼
+domain/           entities · value objects · ProrationEngine/GracePeriodPolicy · PORTS (interfaces)
 ```
+
+Dependencies point inward only. Domain has no framework deps, so every business rule is
+unit-testable with in-memory fakes. Ports live in `domain/port`; adapters implement them;
+`infrastructure/Bootstrap.kt` wires it all with manual constructor DI.
+
+## Prerequisites
+- Docker (for local Postgres and Testcontainers)
+- The `./kotlin` wrapper downloads its own toolchain/JDK on first run — no local JDK needed.
+
+## Run locally
+```bash
+docker compose up -d --wait                 # local Postgres 16 on :5432
+DEV_AUTH_ENABLED=true ./kotlin run          # Flyway migrates, serves on :8080
+```
+Then obtain a dev JWT (no Google needed) and call the API:
+```bash
+TOKEN=$(curl -s -X POST localhost:8080/api/v1/auth/dev-login \
+  -H 'Content-Type: application/json' -d '{"email":"mike.pgmobiledev@gmail.com"}' \
+  | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+curl localhost:8080/api/v1/stores -H "Authorization: Bearer $TOKEN"
+```
+Run on a different port: `./kotlin run -- -port=8081`.
+
+## Test
+```bash
+./kotlin test        # Kotest specs: domain + use-case units + Testcontainers integration
+```
+
+## Package / Docker
+```bash
+./kotlin package     # -> build/tasks/_ibms-backend_executableJarJvm/ibms-backend-jvm-executable.jar
+docker build -t ibms-backend .
+```
+The image runs the executable fat jar; all config is via environment variables.
+
+## Configuration
+Environment variables (see [.env.example](.env.example)): `DB_URL`/`DB_USER`/`DB_PASSWORD`,
+`JWT_SECRET`/`JWT_ISSUER`/`JWT_AUDIENCE`, `GOOGLE_OAUTH_CLIENT_ID`, `DEV_AUTH_ENABLED`,
+`STORAGE_LOCAL_DIR`, `CORS_ALLOWED_HOSTS`, and the (currently optional) `GEMINI_API_KEY` /
+`MAILERSEND_*`. See [SECURITY.md](SECURITY.md) for the production checklist.
+
+## API
+Base path `/api/v1`; JSON; `Authorization: Bearer <jwt>` on everything except `/auth/google`
+and `/auth/dev-login`. Endpoints + role matrix follow the canonical `API_CONTRACT.md`.
+Flyway migrations live in `resources/db/migration` (V1 schema, V2 OCR-template seed, V3
+bootstrap admin, V4 partial account-number uniqueness).
+
+## Status
+- **Done:** auth + RBAC, CRUD (users/providers/stores/accounts/attachments), the billing
+  engine (preview/compile/approve/pay, invoice numbering, double-bill guard, POI Excel export),
+  account transfer/deactivate, and the daily termination-grace expiry job.
+- **Deferred:** OCR ingestion (Gemini) and email (MailerSend) with activity logging + reports.
+- **Follow-ups:** see [SECURITY.md](SECURITY.md).

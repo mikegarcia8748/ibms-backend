@@ -1,6 +1,7 @@
 product: jvm/app
 
 dependencies:
+  # --- Ktor server ---
   - $ktor.serialization.kotlinx.json
   - $ktor.server.auth
   - $ktor.server.auth.jwt
@@ -8,27 +9,37 @@ dependencies:
   - $ktor.server.config.yaml
   - $ktor.server.contentNegotiation
   - $ktor.server.core
+  - $ktor.server.cors
   - $ktor.server.metrics.micrometer
   - $ktor.server.netty
-  - $ktor.server.openapi
-  - $ktor.server.routingOpenapi
-  - $ktor.server.sessions
-  - $ktor.server.swagger
+  - $ktor.server.requestValidation
+  - $ktor.server.statusPages
+  # --- Data access ---
   - $libs.exposed.core
-  - $libs.exposed.r2dbc
-  - $libs.h2database.h2
-  - $libs.h2database.r2dbc
-  - $libs.koin.ktor
-  - $libs.koin.loggerSlf4j
+  - $libs.exposed.jdbc
+  - $libs.exposed.java.time
+  - $libs.hikaricp
+  - $libs.flyway.core
+  - $libs.flyway.database.postgresql
+  - $libs.postgresql
+  # --- Shared domain ---
+  - $libs.kotlinx.datetime
+  # --- Auth ---
+  - $libs.google.api.client
+  # --- Excel export ---
+  - $libs.poi.ooxml
+  # --- Logging / metrics ---
   - $libs.logback.classic
   - $libs.micrometer.registryPrometheus
-  - $libs.postgresql
 
 test-dependencies:
   - $ktor.server.testHost
+  - $libs.kotest.runner.junit5
+  - $libs.kotest.assertions.core
+  - $libs.mockk
+  - $libs.testcontainers.postgresql
 
 settings:
   ktor: enabled
   kotlin:
     serialization: enabled
-

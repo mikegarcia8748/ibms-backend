@@ -3,11 +3,7 @@ ktor:
     port: 8080
   application:
     modules:
-      - com.puregoldbe.ibms.HttpKt.configureHttp
       - com.puregoldbe.ibms.MonitoringKt.configureMonitoring
       - com.puregoldbe.ibms.SerializationKt.configureSerialization
-      - com.puregoldbe.ibms.SecurityKt.configureSecurity
-      - com.puregoldbe.ibms.KoinKt.configureKoin
-      - com.puregoldbe.ibms.PostgresKt.configurePostgres
-      - com.puregoldbe.ibms.ExposedKt.configureExposed
       - com.puregoldbe.ibms.RoutingKt.configureRouting
+      - com.puregoldbe.ibms.infrastructure.BootstrapKt.module
