@@ -10,10 +10,13 @@ import com.puregoldbe.ibms.domain.model.StoreType
 import com.puregoldbe.ibms.domain.model.TopSheet
 import com.puregoldbe.ibms.domain.model.TopSheetStatus
 import com.puregoldbe.ibms.domain.port.AccountRepository
+import com.puregoldbe.ibms.domain.port.ActivityRecorder
+import com.puregoldbe.ibms.domain.port.IdempotencyContext
 import com.puregoldbe.ibms.domain.port.InvoiceSequenceRepository
 import com.puregoldbe.ibms.domain.port.ProviderRepository
 import com.puregoldbe.ibms.domain.port.StoreRepository
 import com.puregoldbe.ibms.domain.port.TopSheetRepository
+import com.puregoldbe.ibms.support.FakeIdempotencyKeyRepository
 import com.puregoldbe.ibms.support.ImmediateTransactionRunner
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.IsolationMode
@@ -46,7 +49,9 @@ class CompileTopSheetUseCaseSpec : BehaviorSpec({
     val providers = mockk<ProviderRepository>()
     val topsheets = mockk<TopSheetRepository>(relaxed = true)
     val sequences = mockk<InvoiceSequenceRepository>()
-    val useCase = CompileTopSheetUseCase(accounts, stores, providers, topsheets, sequences, ImmediateTransactionRunner())
+    val idempotency = FakeIdempotencyKeyRepository()
+    val activity = mockk<ActivityRecorder>(relaxed = true)
+    val useCase = CompileTopSheetUseCase(accounts, stores, providers, topsheets, sequences, idempotency, activity, ImmediateTransactionRunner())
 
     val compiled = TopSheet(
         id = "ts1", invoiceNumber = "CONV-202608-0001", billingPeriod = "2026-08",
@@ -70,6 +75,28 @@ class CompileTopSheetUseCaseSpec : BehaviorSpec({
                 verify(exactly = 1) {
                     topsheets.create("CONV-202608-0001", "2026-08", "p1", "Converge", 2, "2000.00", "compiler")
                 }
+                verify(exactly = 2) { topsheets.addLine(eq("ts1"), any()) }
+            }
+        }
+    }
+
+    Given("an Idempotency-Key and two identical compile requests") {
+        every { providers.findById("p1") } returns provider
+        every { stores.list(null, null) } returns listOf(store)
+        every { accounts.list(null, "p1", null) } returns listOf(acct("a1"), acct("a2"))
+        every { topsheets.billedAccountIds("2026-08") } returns emptySet()
+        every { sequences.nextValue("p1") } returns 1
+        every { sequences.prefixOf("p1") } returns "CONV-"
+        every { topsheets.create(any(), any(), any(), any(), any(), any(), any()) } returns compiled
+        val ctx = IdempotencyContext(key = "idem-1", requestHash = "hash-1", userId = "compiler")
+
+        When("compiling twice with the same key") {
+            val first = useCase("p1", "2026-08", "compiler", ctx)
+            val second = useCase("p1", "2026-08", "compiler", ctx)
+            Then("the second call replays the stored topsheet and compile ran only once") {
+                first.id shouldBe "ts1"
+                second.id shouldBe "ts1"
+                verify(exactly = 1) { topsheets.create(any(), any(), any(), any(), any(), any(), any()) }
                 verify(exactly = 2) { topsheets.addLine(eq("ts1"), any()) }
             }
         }

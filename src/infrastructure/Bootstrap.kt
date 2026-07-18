@@ -7,9 +7,11 @@ import com.puregoldbe.ibms.adapter.db.migrate
 import com.puregoldbe.ibms.adapter.gateway.ExposedTransactionRunner
 import com.puregoldbe.ibms.adapter.gateway.GoogleTokenVerifierAdapter
 import com.puregoldbe.ibms.adapter.gateway.LocalDiskStorage
+import com.puregoldbe.ibms.adapter.gateway.SimulatedOcrExtractor
 import com.puregoldbe.ibms.adapter.gateway.SystemClock
 import com.puregoldbe.ibms.adapter.repository.*
 import com.puregoldbe.ibms.adapter.security.JwtService
+import com.puregoldbe.ibms.adapter.security.LocalHmacPresign
 import com.puregoldbe.ibms.adapter.security.configureAuthentication
 import com.puregoldbe.ibms.application.usecase.*
 import com.puregoldbe.ibms.infrastructure.config.AppConfig
@@ -25,12 +27,18 @@ import kotlin.time.Duration.Companion.hours
 
 /**
  * Composition root: loads config, migrates + connects the DB, constructs the
- * adapters and use cases (manual constructor DI), and wires the HTTP routes under
- * /api/v1. This is the only place the concrete implementations are named.
+ * adapters and use cases (manual constructor DI), and wires the HTTP routes at the
+ * root (matching the API_CONTRACT paths). The only place concrete impls are named.
  */
-fun Application.module() {
-    val cfg = AppConfig.fromEnv()
+fun Application.module() = moduleWith(AppConfig.fromEnv())
 
+/**
+ * Config-injectable entry point so integration tests can point the app at a
+ * Testcontainers DB. Kept a distinct name from [module] so Ktor's application.yaml
+ * module loader resolves `BootstrapKt.module` unambiguously (an overload named
+ * `module` would make it try to inject the AppConfig parameter and fail to boot).
+ */
+fun Application.moduleWith(cfg: AppConfig) {
     if (cfg.jwt.secret == "dev-secret-change-me") {
         log.warn("[security] JWT_SECRET is the built-in default — set a strong secret before production.")
     }
@@ -49,6 +57,8 @@ fun Application.module() {
     val storage = LocalDiskStorage(cfg.storageLocalDir)
     val tokenVerifier = GoogleTokenVerifierAdapter(cfg.googleOauthClientId)
     val jwtService = JwtService(cfg.jwt)
+    val presign = LocalHmacPresign(cfg.jwt.secret, cfg.appUrl, clock)
+    val ocrGateway = SimulatedOcrExtractor()
 
     val users = ExposedUserRepository()
     val providers = ExposedProviderRepository()
@@ -58,6 +68,10 @@ fun Application.module() {
     val accounts = ExposedAccountRepository()
     val topsheets = ExposedTopSheetRepository()
     val transfers = ExposedTransferRepository()
+    val idempotency = ExposedIdempotencyKeyRepository()
+    val activities = ExposedActivityRepository()
+    val ocrTemplates = ExposedOcrTemplateRepository()
+    val ocrBatches = ExposedOcrBatchRepository()
 
     // --- Use cases ---
     val authGoogle = AuthenticateWithGoogleUseCase(tokenVerifier, users, tx)
@@ -67,28 +81,41 @@ fun Application.module() {
     val updateUserRole = UpdateUserRoleUseCase(users, tx)
     val listProviders = ListProvidersUseCase(providers, tx)
     val createProvider = CreateProviderUseCase(providers, sequences, tx)
+    val updateProvider = UpdateProviderUseCase(providers, tx)
     val deactivateProvider = DeactivateProviderUseCase(providers, clock, tx)
     val listStores = ListStoresUseCase(stores, tx)
     val getStore = GetStoreUseCase(stores, tx)
-    val createStore = CreateStoreUseCase(stores, attachments, tx)
+    val createStore = CreateStoreUseCase(stores, attachments, activities, tx)
+    val updateStore = UpdateStoreUseCase(stores, attachments, tx)
     val closeStore = CloseStoreUseCase(stores, attachments, accounts, clock, tx)
     val getFloating = GetFloatingAccountsUseCase(accounts, tx)
     val listAccounts = ListAccountsUseCase(accounts, tx)
     val getAccount = GetAccountUseCase(accounts, tx)
-    val createAccount = CreateAccountUseCase(accounts, providers, stores, tx)
-    val transferAccount = TransferAccountUseCase(accounts, stores, transfers, attachments, clock, tx)
-    val deactivateAccount = DeactivateAccountUseCase(accounts, attachments, clock, tx)
-    val uploadAttachment = UploadAttachmentUseCase(attachments, storage, tx)
-    val downloadAttachment = DownloadAttachmentUseCase(attachments, storage, tx)
+    val createAccount = CreateAccountUseCase(accounts, providers, stores, activities, tx)
+    val updateAccount = UpdateAccountUseCase(accounts, providers, stores, tx)
+    val transferAccount = TransferAccountUseCase(accounts, stores, transfers, attachments, idempotency, activities, clock, tx)
+    val listTransfers = ListTransfersUseCase(transfers, tx)
+    val deactivateAccount = DeactivateAccountUseCase(accounts, attachments, activities, clock, tx)
+    val presignUpload = PresignUploadUseCase(attachments, presign, tx)
+    val presignDownload = PresignDownloadUseCase(attachments, presign, tx)
+    val storeBlob = StoreBlobUseCase(attachments, storage, presign, tx)
+    val readBlob = ReadBlobUseCase(attachments, storage, presign, tx)
     val previewCompilation = PreviewCompilationUseCase(accounts, stores, topsheets, tx)
-    val compileTopSheet = CompileTopSheetUseCase(accounts, stores, providers, topsheets, sequences, tx)
+    val compileTopSheet = CompileTopSheetUseCase(accounts, stores, providers, topsheets, sequences, idempotency, activities, tx)
     val listTopSheets = ListTopSheetsUseCase(topsheets, tx)
     val getTopSheet = GetTopSheetUseCase(topsheets, tx)
     val getTopSheetDetails = GetTopSheetDetailsUseCase(topsheets, tx)
-    val approveTopSheet = ApproveTopSheetUseCase(topsheets, clock, tx)
-    val payTopSheet = PayTopSheetUseCase(topsheets, clock, tx)
+    val approveTopSheet = ApproveTopSheetUseCase(topsheets, activities, clock, tx)
+    val payTopSheet = PayTopSheetUseCase(topsheets, idempotency, clock, tx)
     val exportTopSheet = ExportTopSheetExcelUseCase(topsheets, tx)
     val expireGrace = ExpireGracePeriodAccountsUseCase(accounts, clock, tx)
+    val listActivities = ListActivitiesUseCase(activities, tx)
+    val triggerOcr = TriggerOcrExtractionUseCase(ocrBatches, ocrGateway, tx)
+    val listOcrBatches = ListOcrBatchesUseCase(ocrBatches, tx)
+    val getOcrBatchRows = GetOcrBatchRowsUseCase(ocrBatches, tx)
+    val listOcrTemplates = ListOcrTemplatesUseCase(ocrTemplates, tx)
+    val createOcrTemplate = CreateOcrTemplateUseCase(ocrTemplates, tx)
+    val updateOcrTemplate = UpdateOcrTemplateUseCase(ocrTemplates, tx)
 
     // --- Cross-cutting plugins ---
     configureStatusPages()
@@ -96,6 +123,7 @@ fun Application.module() {
     install(CORS) {
         allowMethod(HttpMethod.Get)
         allowMethod(HttpMethod.Post)
+        allowMethod(HttpMethod.Put)
         allowMethod(HttpMethod.Patch)
         allowMethod(HttpMethod.Delete)
         allowHeader(HttpHeaders.Authorization)
@@ -107,23 +135,27 @@ fun Application.module() {
         }
     }
 
-    // --- Routes ---
+    // --- Routes (served at root to match the API_CONTRACT paths) ---
     routing {
-        route("/api/v1") {
-            publicAuthRoutes(authGoogle, authDev, jwtService, cfg.devAuthEnabled)
-            authenticate("auth-jwt") {
-                securedAuthRoutes(getCurrentUser, jwtService)
-                userRoutes(listUsers, updateUserRole)
-                providerRoutes(listProviders, createProvider, deactivateProvider)
-                storeRoutes(listStores, getStore, createStore, closeStore, getFloating)
-                accountRoutes(listAccounts, getAccount, createAccount, transferAccount, deactivateAccount)
-                topSheetRoutes(
-                    previewCompilation, compileTopSheet, listTopSheets, getTopSheet,
-                    getTopSheetDetails, approveTopSheet, payTopSheet, exportTopSheet,
-                )
-                attachmentRoutes(uploadAttachment, downloadAttachment)
-                jobRoutes(expireGrace)
-            }
+        publicAuthRoutes(authGoogle, authDev, jwtService, cfg.devAuthEnabled)
+        // Public, token-gated blob transfer — the presigned URL is the credential.
+        attachmentBlobRoutes(storeBlob, readBlob)
+        authenticate("auth-jwt") {
+            securedAuthRoutes(getCurrentUser, jwtService)
+            userRoutes(getCurrentUser, listUsers, updateUserRole)
+            providerRoutes(listProviders, createProvider, updateProvider, deactivateProvider)
+            storeRoutes(listStores, getStore, createStore, updateStore, closeStore, getFloating)
+            accountRoutes(listAccounts, getAccount, createAccount, updateAccount, transferAccount, deactivateAccount)
+            transferRoutes(listTransfers, transferAccount)
+            activityRoutes(listActivities)
+            ocrRoutes(triggerOcr, listOcrBatches, getOcrBatchRows, listOcrTemplates, createOcrTemplate, updateOcrTemplate)
+            topSheetRoutes(
+                previewCompilation, compileTopSheet, listTopSheets, getTopSheet,
+                getTopSheetDetails, approveTopSheet, payTopSheet,
+            )
+            exportRoutes(exportTopSheet)
+            attachmentRoutes(presignUpload, presignDownload)
+            jobRoutes(expireGrace)
         }
     }
 

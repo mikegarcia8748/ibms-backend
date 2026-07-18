@@ -4,9 +4,13 @@ import com.puregoldbe.ibms.adapter.db.Attachments
 import com.puregoldbe.ibms.adapter.db.Stores
 import com.puregoldbe.ibms.adapter.db.Users
 import com.puregoldbe.ibms.adapter.db.jt
+import com.puregoldbe.ibms.adapter.db.keysetAfter
+import com.puregoldbe.ibms.adapter.db.keysetAnchor
 import com.puregoldbe.ibms.adapter.db.kx
+import com.puregoldbe.ibms.adapter.db.toCursorPage
 import com.puregoldbe.ibms.adapter.db.toUuid
 import com.puregoldbe.ibms.adapter.db.toUuidOrNull
+import com.puregoldbe.ibms.domain.model.CursorPage
 import com.puregoldbe.ibms.domain.model.Store
 import com.puregoldbe.ibms.domain.model.StoreStatus
 import com.puregoldbe.ibms.domain.model.StoreUpsertRequest
@@ -33,6 +37,22 @@ class ExposedStoreRepository : StoreRepository {
             }
             .orderBy(Stores.name)
             .map { it.toStore() }
+
+    override fun page(status: StoreStatus?, query: String?, cursor: String?, limit: Int): CursorPage<Store> {
+        val anchor = Stores.keysetAnchor(Stores.createdAt, cursor)
+        return Stores.selectAll()
+            .apply { if (status != null) andWhere { Stores.status eq status } }
+            .apply {
+                if (!query.isNullOrBlank()) {
+                    andWhere { (Stores.name like "%$query%") or (Stores.branchCode like "%$query%") }
+                }
+            }
+            .apply { if (anchor != null) andWhere { keysetAfter(Stores, Stores.createdAt, anchor) } }
+            .orderBy(Stores.createdAt to SortOrder.ASC, Stores.id to SortOrder.ASC)
+            .limit(limit + 1)
+            .map { it.toStore() }
+            .toCursorPage(limit) { it.id }
+    }
 
     override fun existsByBranchCode(branchCode: String): Boolean =
         Stores.selectAll().where { Stores.branchCode eq branchCode }.count() > 0

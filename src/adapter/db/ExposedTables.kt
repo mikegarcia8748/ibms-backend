@@ -187,6 +187,17 @@ object Activities : UUIDTable("activities") {
     val createdAt  = timestamp("created_at")
 }
 
+object IdempotencyKeys : UUIDTable("idempotency_keys") {
+    val scope          = text("scope")
+    val idempotencyKey = text("idempotency_key")
+    val userId         = reference("user_id", Users).nullable()
+    val requestHash    = text("request_hash")
+    val responseStatus = integer("response_status").nullable()
+    val responseBody   = text("response_body").nullable()
+    val createdAt      = timestamp("created_at")
+    val completedAt    = timestamp("completed_at").nullable()
+}
+
 object OcrTemplates : UUIDTable("ocr_templates") {
     val configKey            = text("config_key").uniqueIndex()
     val providerId           = reference("provider_id", Providers).nullable()
@@ -202,4 +213,31 @@ object OcrTemplates : UUIDTable("ocr_templates") {
     val sampleFileText       = text("sample_file_text").nullable()
     val createdAt            = timestamp("created_at")
     val updatedAt            = timestamp("updated_at")
+}
+
+object OcrBatches : UUIDTable("ocr_batches") {
+    val uploadedBy   = reference("uploaded_by", Users).nullable()
+    val providerId   = reference("provider_id", Providers).nullable()
+    val billingMonth = text("billing_month").nullable()
+    val fileName     = text("file_name").nullable()
+    val sourceId     = reference("source_id", Attachments).nullable()
+    val method       = text("method").nullable()
+    val usedTemplate = text("used_template").nullable()
+    val status       = text("status")
+    val createdAt    = timestamp("created_at")
+}
+
+object OcrExtractedRows : UUIDTable("ocr_extracted_rows") {
+    val batchId            = reference("batch_id", OcrBatches)
+    val accountNumber      = text("account_number").nullable()
+    val amount             = decimal("amount", 14, 2).nullable()
+    val outstandingBalance = decimal("outstanding_balance", 14, 2).nullable()
+    val dueDate            = date("due_date").nullable()
+    val ispName            = text("isp_name").nullable()
+    val storeName          = text("store_name").nullable()
+    val invoiceNumber      = text("invoice_number").nullable()
+    val billNumber         = text("bill_number").nullable()
+    val billingPeriod      = text("billing_period").nullable()
+    val matchedAccountId   = reference("matched_account_id", Accounts).nullable()
+    val reconciled         = bool("reconciled")
 }

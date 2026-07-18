@@ -4,12 +4,15 @@ import com.auth0.jwt.JWT
 import com.auth0.jwt.JWTVerifier
 import com.auth0.jwt.algorithms.Algorithm
 import com.puregoldbe.ibms.domain.error.DomainError
+import com.puregoldbe.ibms.domain.model.ErrorEnvelope
 import com.puregoldbe.ibms.domain.model.UserProfile
 import com.puregoldbe.ibms.domain.model.UserRole
 import com.puregoldbe.ibms.infrastructure.config.JwtConfig
+import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.auth.*
 import io.ktor.server.auth.jwt.*
+import io.ktor.server.response.*
 import java.util.Date
 
 /** The authenticated caller, resolved from the backend JWT's claims. */
@@ -42,6 +45,14 @@ fun Application.configureAuthentication(jwtService: JwtService) {
             validate { credential ->
                 if (credential.payload.subject != null) JWTPrincipal(credential.payload) else null
             }
+            // A missing/invalid token is rejected here, before any handler or StatusPages
+            // runs — emit the unified error envelope so 401s match the contract too.
+            challenge { _, _ ->
+                call.respond(
+                    HttpStatusCode.Unauthorized,
+                    ErrorEnvelope("error", "401", "authentication required", null),
+                )
+            }
         }
     }
 }
@@ -61,7 +72,9 @@ fun ApplicationCall.authenticatedUserOrNull(): AuthenticatedUser? {
  */
 fun ApplicationCall.authorize(vararg allowed: UserRole): AuthenticatedUser {
     val user = authenticatedUserOrNull() ?: throw DomainError.Unauthorized("authentication required")
-    if (allowed.isNotEmpty() && user.role !in allowed) {
+    // SYSADMIN is a global superuser: admitted to every endpoint regardless of the
+    // allow-list, so per-route lists below carry only the contract's non-sysadmin roles.
+    if (allowed.isNotEmpty() && user.role != UserRole.SYSADMIN && user.role !in allowed) {
         throw DomainError.Forbidden("role ${user.role.name.lowercase()} is not permitted for this action")
     }
     return user

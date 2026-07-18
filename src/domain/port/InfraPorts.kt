@@ -31,6 +31,22 @@ interface StoragePort {
     fun read(key: String): ByteArray?
 }
 
+/** The two operations a presigned URL can authorize. */
+enum class PresignOp { UPLOAD, DOWNLOAD }
+
+/**
+ * Issues and verifies short-lived signed URLs for direct blob upload/download.
+ * The local adapter signs URLs back at this backend; the same seam can later front
+ * a real S3/GCS presigner without changing callers.
+ */
+interface PresignPort {
+    /** A full signed URL (with token + expiry) the client uses to PUT/GET the blob. */
+    fun presignedUrl(attachmentId: String, op: PresignOp): String
+
+    /** Validate a token for (attachmentId, op); false if tampered with or expired. */
+    fun isValid(attachmentId: String, op: PresignOp, token: String): Boolean
+}
+
 /** Verifies a Google OIDC ID token server-side and returns the identity. */
 interface TokenVerifierPort {
     /** @return the verified identity, or null if the token is invalid/expired. */

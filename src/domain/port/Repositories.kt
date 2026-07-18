@@ -14,6 +14,7 @@ interface UserRepository {
     fun findByEmail(email: String): UserProfile?
     fun findByGoogleSub(googleSub: String): UserProfile?
     fun list(role: UserRole?): List<UserProfile>
+    fun page(role: UserRole?, cursor: String?, limit: Int): CursorPage<UserProfile>
     fun countByRole(role: UserRole): Int
     fun create(email: String, name: String, googleSub: String?, role: UserRole): UserProfile
     fun updateRole(id: String, role: UserRole): UserProfile?
@@ -23,6 +24,7 @@ interface UserRepository {
 interface ProviderRepository {
     fun findById(id: String): Provider?
     fun list(status: ProviderStatus?): List<Provider>
+    fun page(status: ProviderStatus?, cursor: String?, limit: Int): CursorPage<Provider>
     fun create(name: String, paymentScheduleDay: Int): Provider
     fun updateDetails(id: String, name: String?, paymentScheduleDay: Int?): Provider?
     fun deactivate(id: String, at: Instant): Provider?
@@ -55,6 +57,7 @@ interface AttachmentRepository {
 interface StoreRepository {
     fun findById(id: String): Store?
     fun list(status: StoreStatus?, query: String?): List<Store>
+    fun page(status: StoreStatus?, query: String?, cursor: String?, limit: Int): CursorPage<Store>
     fun existsByBranchCode(branchCode: String): Boolean
     fun create(input: StoreUpsertRequest, createdBy: String?): Store
     fun update(id: String, input: StoreUpsertRequest): Store?
@@ -64,6 +67,7 @@ interface StoreRepository {
 interface AccountRepository {
     fun findById(id: String): Account?
     fun list(storeId: String?, providerId: String?, status: AccountStatus?): List<Account>
+    fun page(storeId: String?, providerId: String?, status: AccountStatus?, cursor: String?, limit: Int): CursorPage<Account>
     fun existsByProviderAndNumber(providerId: String, accountNumber: String): Boolean
     fun create(input: AccountUpsertRequest, createdBy: String?): Account
     fun update(id: String, input: AccountUpsertRequest): Account?

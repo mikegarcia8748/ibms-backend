@@ -7,11 +7,15 @@ import com.puregoldbe.ibms.adapter.db.Providers
 import com.puregoldbe.ibms.adapter.db.Stores
 import com.puregoldbe.ibms.adapter.db.Users
 import com.puregoldbe.ibms.adapter.db.jt
+import com.puregoldbe.ibms.adapter.db.keysetAfter
+import com.puregoldbe.ibms.adapter.db.keysetAnchor
 import com.puregoldbe.ibms.adapter.db.kx
+import com.puregoldbe.ibms.adapter.db.toCursorPage
 import com.puregoldbe.ibms.adapter.db.toUuid
 import com.puregoldbe.ibms.adapter.db.toUuidOrNull
 import com.puregoldbe.ibms.domain.model.Account
 import com.puregoldbe.ibms.domain.model.AccountStatus
+import com.puregoldbe.ibms.domain.model.CursorPage
 import com.puregoldbe.ibms.domain.model.AccountUpsertRequest
 import com.puregoldbe.ibms.domain.model.StoreStatus
 import com.puregoldbe.ibms.domain.port.AccountRepository
@@ -38,6 +42,25 @@ class ExposedAccountRepository : AccountRepository {
             .apply { if (status != null) andWhere { Accounts.status eq status } }
             .orderBy(Accounts.accountNumber)
             .map { it.toAccount(proofIdsFor(it[Accounts.id].value)) }
+
+    override fun page(
+        storeId: String?,
+        providerId: String?,
+        status: AccountStatus?,
+        cursor: String?,
+        limit: Int,
+    ): CursorPage<Account> {
+        val anchor = Accounts.keysetAnchor(Accounts.createdAt, cursor)
+        return Accounts.selectAll()
+            .apply { if (storeId != null) andWhere { Accounts.storeId eq storeId.toUuid() } }
+            .apply { if (providerId != null) andWhere { Accounts.providerId eq providerId.toUuid() } }
+            .apply { if (status != null) andWhere { Accounts.status eq status } }
+            .apply { if (anchor != null) andWhere { keysetAfter(Accounts, Accounts.createdAt, anchor) } }
+            .orderBy(Accounts.createdAt to SortOrder.ASC, Accounts.id to SortOrder.ASC)
+            .limit(limit + 1)
+            .map { it.toAccount(proofIdsFor(it[Accounts.id].value)) }
+            .toCursorPage(limit) { it.id }
+    }
 
     override fun existsByProviderAndNumber(providerId: String, accountNumber: String): Boolean =
         Accounts.selectAll()

@@ -5,6 +5,7 @@ import com.puregoldbe.ibms.domain.error.DomainError
 import com.puregoldbe.ibms.domain.model.Store
 import com.puregoldbe.ibms.domain.model.StoreType
 import com.puregoldbe.ibms.domain.model.StoreUpsertRequest
+import com.puregoldbe.ibms.domain.port.ActivityRecorder
 import com.puregoldbe.ibms.domain.port.AttachmentRepository
 import com.puregoldbe.ibms.domain.port.StoreRepository
 import com.puregoldbe.ibms.support.ImmediateTransactionRunner
@@ -22,7 +23,8 @@ class CreateStoreUseCaseSpec : BehaviorSpec({
 
     val stores = mockk<StoreRepository>()
     val attachments = mockk<AttachmentRepository>()
-    val useCase = CreateStoreUseCase(stores, attachments, ImmediateTransactionRunner())
+    val activity = mockk<ActivityRecorder>(relaxed = true)
+    val useCase = CreateStoreUseCase(stores, attachments, activity, ImmediateTransactionRunner())
 
     val input = StoreUpsertRequest(
         storeType = StoreType.PUREGOLD,

@@ -5,9 +5,13 @@ import com.puregoldbe.ibms.adapter.db.Attachments
 import com.puregoldbe.ibms.adapter.db.Stores
 import com.puregoldbe.ibms.adapter.db.Transfers
 import com.puregoldbe.ibms.adapter.db.Users
+import com.puregoldbe.ibms.adapter.db.keysetAfter
+import com.puregoldbe.ibms.adapter.db.keysetAnchor
 import com.puregoldbe.ibms.adapter.db.kx
 import com.puregoldbe.ibms.adapter.db.jt
+import com.puregoldbe.ibms.adapter.db.toCursorPage
 import com.puregoldbe.ibms.adapter.db.toUuid
+import com.puregoldbe.ibms.domain.model.CursorPage
 import com.puregoldbe.ibms.domain.model.TransferRecord
 import com.puregoldbe.ibms.domain.port.TransferRepository
 import kotlinx.datetime.Instant
@@ -36,6 +40,22 @@ class ExposedTransferRepository : TransferRepository {
             row[Transfers.transferDate] = at.jt()
         }.value
         return Transfers.selectAll().where { Transfers.id eq id }.map { it.toTransfer() }.single()
+    }
+
+    override fun page(accountId: String?, cursor: String?, limit: Int): CursorPage<TransferRecord> {
+        val anchor = Transfers.keysetAnchor(Transfers.createdAt, cursor)
+        return Transfers.selectAll()
+            .apply {
+                if (accountId != null) {
+                    val a = accountId.toUuid()
+                    andWhere { (Transfers.oldAccountId eq a) or (Transfers.newAccountId eq a) }
+                }
+            }
+            .apply { if (anchor != null) andWhere { keysetAfter(Transfers, Transfers.createdAt, anchor) } }
+            .orderBy(Transfers.createdAt to SortOrder.ASC, Transfers.id to SortOrder.ASC)
+            .limit(limit + 1)
+            .map { it.toTransfer() }
+            .toCursorPage(limit) { it.id }
     }
 
     private fun ResultRow.toTransfer() = TransferRecord(

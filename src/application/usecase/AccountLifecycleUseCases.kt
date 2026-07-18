@@ -4,9 +4,14 @@ import com.puregoldbe.ibms.domain.error.DomainError
 import com.puregoldbe.ibms.domain.model.Account
 import com.puregoldbe.ibms.domain.model.AccountStatus
 import com.puregoldbe.ibms.domain.model.AccountUpsertRequest
+import com.puregoldbe.ibms.domain.model.CursorPage
+import com.puregoldbe.ibms.domain.model.TransferRecord
 import com.puregoldbe.ibms.domain.port.AccountRepository
+import com.puregoldbe.ibms.domain.port.ActivityRecorder
 import com.puregoldbe.ibms.domain.port.AttachmentRepository
 import com.puregoldbe.ibms.domain.port.Clock
+import com.puregoldbe.ibms.domain.port.IdempotencyContext
+import com.puregoldbe.ibms.domain.port.IdempotencyKeyRepository
 import com.puregoldbe.ibms.domain.port.StoreRepository
 import com.puregoldbe.ibms.domain.port.TransactionRunner
 import com.puregoldbe.ibms.domain.port.TransferRepository
@@ -22,11 +27,19 @@ class TransferAccountUseCase(
     private val stores: StoreRepository,
     private val transfers: TransferRepository,
     private val attachments: AttachmentRepository,
+    private val idempotency: IdempotencyKeyRepository,
+    private val activity: ActivityRecorder,
     private val clock: Clock,
     private val tx: TransactionRunner,
 ) {
-    suspend operator fun invoke(accountId: String, newStoreId: String, proofId: String, actorId: String?): Account =
-        tx.inTransaction {
+    suspend operator fun invoke(
+        accountId: String,
+        newStoreId: String,
+        proofId: String,
+        actorId: String?,
+        idem: IdempotencyContext? = null,
+    ): Account = tx.inTransaction {
+        idempotent(idempotency, "account.transfer", idem, 201) {
             val actor = actorId ?: throw DomainError.Unauthorized("authentication required")
             val old = accounts.findById(accountId) ?: throw DomainError.NotFound("account $accountId not found")
             if (old.status == AccountStatus.TRANSFERRED) {
@@ -58,21 +71,35 @@ class TransferAccountUseCase(
                 createdBy = actor,
             )
             transfers.create(old.storeId, newStoreId, old.id, moved.id, proofId, actor, clock.now())
+            activity.record(actor, "account.transferred", "account", moved.id)
             moved
         }
+    }
+}
+
+/** Read-only transfer history, cursor-paginated, optionally filtered by account. */
+class ListTransfersUseCase(
+    private val transfers: TransferRepository,
+    private val tx: TransactionRunner,
+) {
+    suspend operator fun invoke(accountId: String?, cursor: String?, limit: Int): CursorPage<TransferRecord> =
+        tx.inTransaction { transfers.page(accountId, cursor, limit) }
 }
 
 /** Requests deactivation: status -> termination_requested and start the 30-day grace. */
 class DeactivateAccountUseCase(
     private val accounts: AccountRepository,
     private val attachments: AttachmentRepository,
+    private val activity: ActivityRecorder,
     private val clock: Clock,
     private val tx: TransactionRunner,
 ) {
     suspend operator fun invoke(accountId: String, proofId: String, actorId: String?): Account = tx.inTransaction {
         accounts.findById(accountId) ?: throw DomainError.NotFound("account $accountId not found")
         if (!attachments.exists(proofId)) throw DomainError.Validation("a valid deactivation proofId is required")
-        accounts.markTerminationRequested(accountId, clock.now())
+        val result = accounts.markTerminationRequested(accountId, clock.now())
             ?: throw DomainError.NotFound("account $accountId not found")
+        activity.record(actorId, "account.deactivation_requested", "account", accountId)
+        result
     }
 }

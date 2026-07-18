@@ -266,6 +266,10 @@ data class AccountUpsertRequest(
 @Serializable
 data class TransferAccountRequest(val newStoreId: String, val proofId: String)
 
+/** Body for the top-level POST /transfers (carries the account id in the payload). */
+@Serializable
+data class TransferCreateRequest(val accountId: String, val newStoreId: String, val proofId: String)
+
 @Serializable
 data class DeactivateAccountRequest(val proofId: String)
 
@@ -295,44 +299,119 @@ data class CompilableLine(
 )
 
 // =====================================================================
-//  OCR ingestion DTOs (mirror the existing /api/ocr contract)
+//  OCR ingestion (batch-trigger model: a batch -> extracted rows -> reconcile)
 // =====================================================================
 @Serializable
-data class OcrExtractRequest(
-    val fileName: String? = null,
-    val fileContent: String? = null,
+data class OcrTemplate(
+    val id: String,
+    val configKey: String,
     val providerId: String? = null,
-    val telcoProvider: String? = null,
+    val ispName: String? = null,
+    val formatName: String,
+    val aiPromptInstruction: String? = null,
+    val accountNumberPattern: String? = null,
+    val amountPattern: String? = null,
+    val dueDatePattern: String? = null,
+    val invoiceNumberPattern: String? = null,
+    val billingPeriodPattern: String? = null,
+    val detectorKeyword: String? = null,
+    val sampleFileText: String? = null,
+    val createdAt: Instant,
+    val updatedAt: Instant? = null,
+)
+
+@Serializable
+data class OcrBatch(
+    val id: String,
+    val uploadedBy: String? = null,
+    val providerId: String? = null,
     val billingMonth: String? = null,       // "YYYY-MM"
-    val primingFormat: String? = null,      // template config_key or "auto"
-)
-
-@Serializable
-data class OcrExtractResponse(
-    val success: Boolean,
-    val method: String,                     // gemini-ocr | booster-ocr-converge | simulated
+    val fileName: String? = null,
+    val sourceId: String? = null,
+    val method: String? = null,             // gemini-ocr | simulated | ...
     val usedTemplate: String? = null,
-    val data: List<OcrRow>,
+    val status: String,                     // extracted | reconciled | committed
+    val createdAt: Instant,
 )
 
 @Serializable
-data class OcrRow(
-    val accountNumber: String,
-    val amount: Money,
-    val dueDate: String? = null,
+data class OcrExtractedRow(
+    val id: String,
+    val batchId: String,
+    val accountNumber: String? = null,
+    val amount: Money? = null,
+    val outstandingBalance: Money? = null,
+    val dueDate: LocalDate? = null,
     val ispName: String? = null,
     val storeName: String? = null,
     val invoiceNumber: String? = null,
     val billNumber: String? = null,
     val billingPeriod: String? = null,
-    val outstandingBalance: Money? = null,
+    val matchedAccountId: String? = null,
+    val reconciled: Boolean = false,
+)
+
+/** Body for POST /ocr/extract — creates a batch and runs extraction on the source. */
+@Serializable
+data class TriggerOcrRequest(
+    val sourceId: String? = null,
+    val providerId: String? = null,
+    val billingMonth: String? = null,       // "YYYY-MM"
+    val fileName: String? = null,
+    val templateKey: String? = null,        // config_key or "auto"
+    val sampleText: String? = null,
+)
+
+/** Body for POST/PUT /ocr/templates. */
+@Serializable
+data class OcrTemplateUpsertRequest(
+    val configKey: String,
+    val formatName: String,
+    val providerId: String? = null,
+    val ispName: String? = null,
+    val aiPromptInstruction: String? = null,
+    val accountNumberPattern: String? = null,
+    val amountPattern: String? = null,
+    val dueDatePattern: String? = null,
+    val invoiceNumberPattern: String? = null,
+    val billingPeriodPattern: String? = null,
+    val detectorKeyword: String? = null,
+    val sampleFileText: String? = null,
 )
 
 // =====================================================================
 //  Generic envelopes
 // =====================================================================
+/**
+ * Unified success envelope wrapping every JSON response (API_CONTRACT).
+ * No field carries a default, so `result`/`message`/`status` always serialize
+ * under the app's bare kotlinx `json()` (encodeDefaults=false); `data` is
+ * nullable and emitted as `null` when absent (explicitNulls=true). Always build
+ * it through the reified `call.ok(...)` / `call.created(...)` helpers so the
+ * generic `T` serializer is resolved at the call site.
+ */
 @Serializable
-data class ApiError(val error: String, val code: String? = null)
+data class ApiResponse<T>(
+    val result: String,
+    val message: String,
+    val status: String,
+    val data: T?,
+)
 
+/**
+ * Unified error envelope (contract shape: `data` is always null). A concrete
+ * type — not `ApiResponse<Nothing>` — so the error boundary needs no generic
+ * serializer. No field carries a default: the app's bare `json()` uses
+ * `encodeDefaults=false`, which would drop any defaulted field from the wire.
+ */
 @Serializable
-data class Page<T>(val items: List<T>, val total: Int, val page: Int = 0, val pageSize: Int = 50)
+data class ErrorEnvelope(
+    val result: String,
+    val status: String,
+    val message: String,
+    val data: String?,
+)
+
+/** One page of a cursor-paginated list; `nextCursor` is null on the last page. */
+@Serializable
+data class CursorPage<T>(val items: List<T>, val nextCursor: String?)

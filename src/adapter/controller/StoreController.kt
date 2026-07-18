@@ -6,6 +6,7 @@ import com.puregoldbe.ibms.application.usecase.CreateStoreUseCase
 import com.puregoldbe.ibms.application.usecase.GetFloatingAccountsUseCase
 import com.puregoldbe.ibms.application.usecase.GetStoreUseCase
 import com.puregoldbe.ibms.application.usecase.ListStoresUseCase
+import com.puregoldbe.ibms.application.usecase.UpdateStoreUseCase
 import com.puregoldbe.ibms.domain.model.CloseStoreRequest
 import com.puregoldbe.ibms.domain.model.StoreUpsertRequest
 import com.puregoldbe.ibms.domain.model.UserRole
@@ -18,6 +19,7 @@ fun Route.storeRoutes(
     listStores: ListStoresUseCase,
     getStore: GetStoreUseCase,
     createStore: CreateStoreUseCase,
+    updateStore: UpdateStoreUseCase,
     closeStore: CloseStoreUseCase,
     getFloatingAccounts: GetFloatingAccountsUseCase,
 ) {
@@ -26,25 +28,32 @@ fun Route.storeRoutes(
             call.authorize()
             val status = parseStoreStatus(call.request.queryParameters["status"])
             val query = call.request.queryParameters["q"]
-            call.respond(listStores(status, query))
+            val p = call.pageParams()
+            call.ok(listStores(status, query, p.cursor, p.limit))
         }
         get("/floating-accounts") {
             call.authorize()
-            call.respond(getFloatingAccounts())
+            call.ok(getFloatingAccounts())
         }
         get("/{id}") {
             call.authorize()
-            call.respond(getStore(call.pathId()))
+            call.ok(getStore(call.pathId()))
         }
         post {
-            val caller = call.authorize(UserRole.SYSADMIN, UserRole.SECRETARY)
+            val caller = call.authorize(UserRole.SECRETARY)
             val req = call.receive<StoreUpsertRequest>()
-            call.respond(HttpStatusCode.Created, createStore(req, caller.userId))
+            call.created(createStore(req, caller.userId))
         }
-        post("/{id}/close") {
-            call.authorize(UserRole.SYSADMIN, UserRole.SECRETARY)
+        put("/{id}") {
+            call.authorize(UserRole.SECRETARY)
+            val req = call.receive<StoreUpsertRequest>()
+            call.ok(updateStore(call.pathId(), req))
+        }
+        // Contract calls this "deactivate"; it performs the same close-store operation.
+        post("/{id}/deactivate") {
+            call.authorize(UserRole.SECRETARY)
             val req = call.receive<CloseStoreRequest>()
-            call.respond(closeStore(call.pathId(), req.reason, req.proofOfClosureId))
+            call.ok(closeStore(call.pathId(), req.reason, req.proofOfClosureId))
         }
     }
 }

@@ -22,13 +22,13 @@ fun Route.publicAuthRoutes(
         post("/google") {
             val req = call.receive<GoogleAuthRequest>()
             val user = authenticateWithGoogle(req.idToken)
-            call.respond(AuthResponse(jwtService.issue(user), user))
+            call.ok(AuthResponse(jwtService.issue(user), user), "Authentication successful!")
         }
         if (devAuthEnabled) {
             post("/dev-login") {
                 val req = call.receive<DevLoginRequest>()
                 val user = authenticateDev(req.email)
-                call.respond(AuthResponse(jwtService.issue(user), user))
+                call.ok(AuthResponse(jwtService.issue(user), user))
             }
         }
     }
@@ -42,12 +42,12 @@ fun Route.securedAuthRoutes(
     route("/auth") {
         get("/me") {
             val caller = call.authorize()
-            call.respond(getCurrentUser(caller.userId))
+            call.ok(getCurrentUser(caller.userId))
         }
         post("/refresh") {
             val caller = call.authorize()
             val user = getCurrentUser(caller.userId)
-            call.respond(AuthResponse(jwtService.issue(user), user))
+            call.ok(AuthResponse(jwtService.issue(user), user))
         }
     }
 }

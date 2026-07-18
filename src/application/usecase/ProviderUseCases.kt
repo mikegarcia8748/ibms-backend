@@ -1,6 +1,7 @@
 package com.puregoldbe.ibms.application.usecase
 
 import com.puregoldbe.ibms.domain.error.DomainError
+import com.puregoldbe.ibms.domain.model.CursorPage
 import com.puregoldbe.ibms.domain.model.Provider
 import com.puregoldbe.ibms.domain.model.ProviderStatus
 import com.puregoldbe.ibms.domain.port.Clock
@@ -13,8 +14,8 @@ class ListProvidersUseCase(
     private val providers: ProviderRepository,
     private val tx: TransactionRunner,
 ) {
-    suspend operator fun invoke(status: ProviderStatus?): List<Provider> =
-        tx.inTransaction { providers.list(status) }
+    suspend operator fun invoke(status: ProviderStatus?, cursor: String?, limit: Int): CursorPage<Provider> =
+        tx.inTransaction { providers.page(status, cursor, limit) }
 }
 
 /**
@@ -42,5 +43,19 @@ class DeactivateProviderUseCase(
 ) {
     suspend operator fun invoke(id: String): Provider = tx.inTransaction {
         providers.deactivate(id, clock.now()) ?: throw DomainError.NotFound("provider $id not found")
+    }
+}
+
+class UpdateProviderUseCase(
+    private val providers: ProviderRepository,
+    private val tx: TransactionRunner,
+) {
+    suspend operator fun invoke(id: String, name: String?, paymentScheduleDay: Int?): Provider = tx.inTransaction {
+        if (name != null && name.isBlank()) throw DomainError.Validation("provider name cannot be blank")
+        if (paymentScheduleDay != null && paymentScheduleDay !in 1..31) {
+            throw DomainError.Validation("paymentScheduleDay must be 1..31")
+        }
+        providers.updateDetails(id, name?.trim(), paymentScheduleDay)
+            ?: throw DomainError.NotFound("provider $id not found")
     }
 }

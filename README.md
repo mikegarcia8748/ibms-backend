@@ -35,10 +35,10 @@ DEV_AUTH_ENABLED=true ./kotlin run          # Flyway migrates, serves on :8080
 ```
 Then obtain a dev JWT (no Google needed) and call the API:
 ```bash
-TOKEN=$(curl -s -X POST localhost:8080/api/v1/auth/dev-login \
+TOKEN=$(curl -s -X POST localhost:8080/auth/dev-login \
   -H 'Content-Type: application/json' -d '{"email":"mike.pgmobiledev@gmail.com"}' \
-  | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
-curl localhost:8080/api/v1/stores -H "Authorization: Bearer $TOKEN"
+  | python3 -c 'import sys,json;print(json.load(sys.stdin)["data"]["token"])')
+curl localhost:8080/stores -H "Authorization: Bearer $TOKEN"
 ```
 Run on a different port: `./kotlin run -- -port=8081`.
 
@@ -61,14 +61,21 @@ Environment variables (see [.env.example](.env.example)): `DB_URL`/`DB_USER`/`DB
 `MAILERSEND_*`. See [SECURITY.md](SECURITY.md) for the production checklist.
 
 ## API
-Base path `/api/v1`; JSON; `Authorization: Bearer <jwt>` on everything except `/auth/google`
-and `/auth/dev-login`. Endpoints + role matrix follow the canonical `API_CONTRACT.md`.
+Paths served at the root (e.g. `/stores`, `/auth/google`) per the API_CONTRACT; JSON;
+`Authorization: Bearer <jwt>` on everything except `/auth/google` and `/auth/dev-login`.
+All JSON responses use the unified envelope `{result, message, status, data}`; list
+endpoints are cursor-paginated. Endpoints + role matrix follow the canonical `API_CONTRACT.md`.
 Flyway migrations live in `resources/db/migration` (V1 schema, V2 OCR-template seed, V3
-bootstrap admin, V4 partial account-number uniqueness).
+bootstrap admin, V4 partial account-number uniqueness, V5 idempotency keys).
 
 ## Status
-- **Done:** auth + RBAC, CRUD (users/providers/stores/accounts/attachments), the billing
+- **Done:** auth + RBAC, CRUD (users/providers/stores/accounts incl. PUT updates), the billing
   engine (preview/compile/approve/pay, invoice numbering, double-bill guard, POI Excel export),
-  account transfer/deactivate, and the daily termination-grace expiry job.
-- **Deferred:** OCR ingestion (Gemini) and email (MailerSend) with activity logging + reports.
+  account transfer/deactivate + the transfers group, and the daily termination-grace expiry job.
+- **Contract structures:** unified response envelope, cursor pagination (`?cursor=&limit=`,
+  `nextCursor`), and `Idempotency-Key` replay on money-mutating POSTs (compile/pay/transfers).
+- **Activities:** audit log written in-transaction by key mutations; read via `GET /activities`.
+- **Attachments:** presigned upload/download over local-disk storage (`PresignPort` seam for S3/GCS).
+- **OCR:** batch/extract/templates pipeline behind an `OcrGateway` seam, using a deterministic
+  `SimulatedOcrExtractor` stub (swap in real Gemini later); MailerSend email still deferred.
 - **Follow-ups:** see [SECURITY.md](SECURITY.md).

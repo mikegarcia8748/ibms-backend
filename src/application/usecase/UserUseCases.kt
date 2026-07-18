@@ -1,6 +1,7 @@
 package com.puregoldbe.ibms.application.usecase
 
 import com.puregoldbe.ibms.domain.error.DomainError
+import com.puregoldbe.ibms.domain.model.CursorPage
 import com.puregoldbe.ibms.domain.model.UserProfile
 import com.puregoldbe.ibms.domain.model.UserRole
 import com.puregoldbe.ibms.domain.port.TransactionRunner
@@ -10,7 +11,8 @@ class ListUsersUseCase(
     private val users: UserRepository,
     private val tx: TransactionRunner,
 ) {
-    suspend operator fun invoke(role: UserRole?): List<UserProfile> = tx.inTransaction { users.list(role) }
+    suspend operator fun invoke(role: UserRole?, cursor: String?, limit: Int): CursorPage<UserProfile> =
+        tx.inTransaction { users.page(role, cursor, limit) }
 }
 
 /**

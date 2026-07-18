@@ -2,8 +2,12 @@ package com.puregoldbe.ibms.adapter.repository
 
 import com.puregoldbe.ibms.adapter.db.Providers
 import com.puregoldbe.ibms.adapter.db.jt
+import com.puregoldbe.ibms.adapter.db.keysetAfter
+import com.puregoldbe.ibms.adapter.db.keysetAnchor
 import com.puregoldbe.ibms.adapter.db.kx
+import com.puregoldbe.ibms.adapter.db.toCursorPage
 import com.puregoldbe.ibms.adapter.db.toUuidOrNull
+import com.puregoldbe.ibms.domain.model.CursorPage
 import com.puregoldbe.ibms.domain.model.Provider
 import com.puregoldbe.ibms.domain.model.ProviderStatus
 import com.puregoldbe.ibms.domain.port.ProviderRepository
@@ -23,6 +27,17 @@ class ExposedProviderRepository : ProviderRepository {
             .apply { if (status != null) andWhere { Providers.status eq status } }
             .orderBy(Providers.name)
             .map { it.toProvider() }
+
+    override fun page(status: ProviderStatus?, cursor: String?, limit: Int): CursorPage<Provider> {
+        val anchor = Providers.keysetAnchor(Providers.createdAt, cursor)
+        return Providers.selectAll()
+            .apply { if (status != null) andWhere { Providers.status eq status } }
+            .apply { if (anchor != null) andWhere { keysetAfter(Providers, Providers.createdAt, anchor) } }
+            .orderBy(Providers.createdAt to SortOrder.ASC, Providers.id to SortOrder.ASC)
+            .limit(limit + 1)
+            .map { it.toProvider() }
+            .toCursorPage(limit) { it.id }
+    }
 
     override fun create(name: String, paymentScheduleDay: Int): Provider {
         val id = Providers.insertAndGetId {

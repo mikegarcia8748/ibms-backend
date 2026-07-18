@@ -19,9 +19,14 @@ object PostgresTestDb {
         .withUsername("ibms")
         .withPassword("ibms")
 
-    val database: Database by lazy {
+    /** Connection details for the shared container; starting it on first access. */
+    val dbConfig: DbConfig by lazy {
         container.start()
-        val ds = buildDataSource(DbConfig(container.jdbcUrl, container.username, container.password, poolSize = 3))
+        DbConfig(container.jdbcUrl, container.username, container.password, poolSize = 3)
+    }
+
+    val database: Database by lazy {
+        val ds = buildDataSource(dbConfig)
         migrate(ds)
         connectExposed(ds)
     }

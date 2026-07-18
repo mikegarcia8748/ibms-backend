@@ -1,5 +1,6 @@
 package com.puregoldbe.ibms.domain.port
 
+import com.puregoldbe.ibms.domain.model.CursorPage
 import com.puregoldbe.ibms.domain.model.TopSheet
 import com.puregoldbe.ibms.domain.model.TopSheetDetail
 import com.puregoldbe.ibms.domain.model.TopSheetStatus
@@ -34,6 +35,7 @@ interface TopSheetRepository {
 
     fun findById(id: String): TopSheet?
     fun list(providerId: String?, billingPeriod: String?, status: TopSheetStatus?): List<TopSheet>
+    fun page(providerId: String?, billingPeriod: String?, status: TopSheetStatus?, cursor: String?, limit: Int): CursorPage<TopSheet>
     fun findLines(topsheetId: String): List<TopSheetDetail>
 
     /** Account ids already billed in [billingPeriod] (the double-billing guard set). */
@@ -55,4 +57,7 @@ interface TransferRepository {
         requestedById: String,
         at: Instant,
     ): TransferRecord
+
+    /** Transfers involving [accountId] (as source or destination), or all when null. */
+    fun page(accountId: String?, cursor: String?, limit: Int): CursorPage<TransferRecord>
 }

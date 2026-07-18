@@ -4,7 +4,9 @@ import com.puregoldbe.ibms.domain.error.DomainError
 import com.puregoldbe.ibms.domain.model.Account
 import com.puregoldbe.ibms.domain.model.AccountStatus
 import com.puregoldbe.ibms.domain.model.AccountUpsertRequest
+import com.puregoldbe.ibms.domain.model.CursorPage
 import com.puregoldbe.ibms.domain.port.AccountRepository
+import com.puregoldbe.ibms.domain.port.ActivityRecorder
 import com.puregoldbe.ibms.domain.port.ProviderRepository
 import com.puregoldbe.ibms.domain.port.StoreRepository
 import com.puregoldbe.ibms.domain.port.TransactionRunner
@@ -14,8 +16,14 @@ class ListAccountsUseCase(
     private val accounts: AccountRepository,
     private val tx: TransactionRunner,
 ) {
-    suspend operator fun invoke(storeId: String?, providerId: String?, status: AccountStatus?): List<Account> =
-        tx.inTransaction { accounts.list(storeId, providerId, status) }
+    suspend operator fun invoke(
+        storeId: String?,
+        providerId: String?,
+        status: AccountStatus?,
+        cursor: String?,
+        limit: Int,
+    ): CursorPage<Account> =
+        tx.inTransaction { accounts.page(storeId, providerId, status, cursor, limit) }
 }
 
 class GetAccountUseCase(
@@ -35,6 +43,7 @@ class CreateAccountUseCase(
     private val accounts: AccountRepository,
     private val providers: ProviderRepository,
     private val stores: StoreRepository,
+    private val activity: ActivityRecorder,
     private val tx: TransactionRunner,
 ) {
     suspend operator fun invoke(input: AccountUpsertRequest, actorId: String?): Account = tx.inTransaction {
@@ -48,6 +57,23 @@ class CreateAccountUseCase(
                 "duplicate_account_number",
             )
         }
-        accounts.create(input, actorId)
+        val account = accounts.create(input, actorId)
+        activity.record(actorId, "account.created", "account", account.id)
+        account
+    }
+}
+
+class UpdateAccountUseCase(
+    private val accounts: AccountRepository,
+    private val providers: ProviderRepository,
+    private val stores: StoreRepository,
+    private val tx: TransactionRunner,
+) {
+    suspend operator fun invoke(id: String, input: AccountUpsertRequest): Account = tx.inTransaction {
+        if (input.accountNumber.isBlank()) throw DomainError.Validation("accountNumber is required")
+        if (!Money.isPositive(input.rate)) throw DomainError.Validation("rate (MRC) must be greater than 0")
+        providers.findById(input.providerId) ?: throw DomainError.Validation("unknown providerId ${input.providerId}")
+        stores.findById(input.storeId) ?: throw DomainError.Validation("unknown storeId ${input.storeId}")
+        accounts.update(id, input) ?: throw DomainError.NotFound("account $id not found")
     }
 }

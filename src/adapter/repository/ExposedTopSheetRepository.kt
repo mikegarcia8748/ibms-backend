@@ -6,9 +6,13 @@ import com.puregoldbe.ibms.adapter.db.TopSheetDetails
 import com.puregoldbe.ibms.adapter.db.TopSheets
 import com.puregoldbe.ibms.adapter.db.Users
 import com.puregoldbe.ibms.adapter.db.jt
+import com.puregoldbe.ibms.adapter.db.keysetAfter
+import com.puregoldbe.ibms.adapter.db.keysetAnchor
 import com.puregoldbe.ibms.adapter.db.kx
+import com.puregoldbe.ibms.adapter.db.toCursorPage
 import com.puregoldbe.ibms.adapter.db.toUuid
 import com.puregoldbe.ibms.adapter.db.toUuidOrNull
+import com.puregoldbe.ibms.domain.model.CursorPage
 import com.puregoldbe.ibms.domain.model.TopSheet
 import com.puregoldbe.ibms.domain.model.TopSheetDetail
 import com.puregoldbe.ibms.domain.model.TopSheetLineStatus
@@ -74,6 +78,25 @@ class ExposedTopSheetRepository : TopSheetRepository {
             .apply { if (status != null) andWhere { TopSheets.status eq status } }
             .orderBy(TopSheets.compilationDate to SortOrder.DESC)
             .map { it.toTopSheet() }
+
+    override fun page(
+        providerId: String?,
+        billingPeriod: String?,
+        status: TopSheetStatus?,
+        cursor: String?,
+        limit: Int,
+    ): CursorPage<TopSheet> {
+        val anchor = TopSheets.keysetAnchor(TopSheets.createdAt, cursor)
+        return TopSheets.selectAll()
+            .apply { if (providerId != null) andWhere { TopSheets.providerId eq providerId.toUuid() } }
+            .apply { if (billingPeriod != null) andWhere { TopSheets.billingPeriod eq billingPeriod } }
+            .apply { if (status != null) andWhere { TopSheets.status eq status } }
+            .apply { if (anchor != null) andWhere { keysetAfter(TopSheets, TopSheets.createdAt, anchor) } }
+            .orderBy(TopSheets.createdAt to SortOrder.ASC, TopSheets.id to SortOrder.ASC)
+            .limit(limit + 1)
+            .map { it.toTopSheet() }
+            .toCursorPage(limit) { it.id }
+    }
 
     override fun findLines(topsheetId: String): List<TopSheetDetail> {
         val uuid = topsheetId.toUuidOrNull() ?: return emptyList()

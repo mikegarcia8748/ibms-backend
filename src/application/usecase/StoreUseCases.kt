@@ -2,10 +2,12 @@ package com.puregoldbe.ibms.application.usecase
 
 import com.puregoldbe.ibms.domain.error.DomainError
 import com.puregoldbe.ibms.domain.model.Account
+import com.puregoldbe.ibms.domain.model.CursorPage
 import com.puregoldbe.ibms.domain.model.Store
 import com.puregoldbe.ibms.domain.model.StoreStatus
 import com.puregoldbe.ibms.domain.model.StoreUpsertRequest
 import com.puregoldbe.ibms.domain.port.AccountRepository
+import com.puregoldbe.ibms.domain.port.ActivityRecorder
 import com.puregoldbe.ibms.domain.port.AttachmentRepository
 import com.puregoldbe.ibms.domain.port.Clock
 import com.puregoldbe.ibms.domain.port.StoreRepository
@@ -16,8 +18,8 @@ class ListStoresUseCase(
     private val stores: StoreRepository,
     private val tx: TransactionRunner,
 ) {
-    suspend operator fun invoke(status: StoreStatus?, query: String?): List<Store> =
-        tx.inTransaction { stores.list(status, query) }
+    suspend operator fun invoke(status: StoreStatus?, query: String?, cursor: String?, limit: Int): CursorPage<Store> =
+        tx.inTransaction { stores.page(status, query, cursor, limit) }
 }
 
 class GetStoreUseCase(
@@ -35,6 +37,7 @@ class GetStoreUseCase(
 class CreateStoreUseCase(
     private val stores: StoreRepository,
     private val attachments: AttachmentRepository,
+    private val activity: ActivityRecorder,
     private val tx: TransactionRunner,
 ) {
     suspend operator fun invoke(input: StoreUpsertRequest, actorId: String?): Store = tx.inTransaction {
@@ -46,7 +49,24 @@ class CreateStoreUseCase(
         if (stores.existsByBranchCode(input.branchCode)) {
             throw DomainError.Conflict("branch_code ${input.branchCode} already exists", "duplicate_branch_code")
         }
-        stores.create(input, actorId)
+        val store = stores.create(input, actorId)
+        activity.record(actorId, "store.created", "store", store.id)
+        store
+    }
+}
+
+class UpdateStoreUseCase(
+    private val stores: StoreRepository,
+    private val attachments: AttachmentRepository,
+    private val tx: TransactionRunner,
+) {
+    suspend operator fun invoke(id: String, input: StoreUpsertRequest): Store = tx.inTransaction {
+        if (input.branchCode.isBlank()) throw DomainError.Validation("branchCode is required")
+        if (input.name.isBlank()) throw DomainError.Validation("store name is required")
+        if (input.proofOfInstallationId.isBlank() || !attachments.exists(input.proofOfInstallationId)) {
+            throw DomainError.Validation("a valid proofOfInstallationId is required", "proof_required")
+        }
+        stores.update(id, input) ?: throw DomainError.NotFound("store $id not found")
     }
 }
 

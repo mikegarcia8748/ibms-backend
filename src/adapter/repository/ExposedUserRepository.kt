@@ -1,7 +1,11 @@
 package com.puregoldbe.ibms.adapter.repository
 
 import com.puregoldbe.ibms.adapter.db.Users
+import com.puregoldbe.ibms.adapter.db.keysetAfter
+import com.puregoldbe.ibms.adapter.db.keysetAnchor
+import com.puregoldbe.ibms.adapter.db.toCursorPage
 import com.puregoldbe.ibms.adapter.db.toUuidOrNull
+import com.puregoldbe.ibms.domain.model.CursorPage
 import com.puregoldbe.ibms.domain.model.UserProfile
 import com.puregoldbe.ibms.domain.model.UserRole
 import com.puregoldbe.ibms.domain.port.UserRepository
@@ -26,6 +30,17 @@ class ExposedUserRepository : UserRepository {
             .apply { if (role != null) andWhere { Users.role eq role } }
             .orderBy(Users.name)
             .map { it.toUserProfile() }
+
+    override fun page(role: UserRole?, cursor: String?, limit: Int): CursorPage<UserProfile> {
+        val anchor = Users.keysetAnchor(Users.createdAt, cursor)
+        return Users.selectAll()
+            .apply { if (role != null) andWhere { Users.role eq role } }
+            .apply { if (anchor != null) andWhere { keysetAfter(Users, Users.createdAt, anchor) } }
+            .orderBy(Users.createdAt to SortOrder.ASC, Users.id to SortOrder.ASC)
+            .limit(limit + 1)
+            .map { it.toUserProfile() }
+            .toCursorPage(limit) { it.id }
+    }
 
     override fun countByRole(role: UserRole): Int =
         Users.selectAll().where { Users.role eq role }.count().toInt()

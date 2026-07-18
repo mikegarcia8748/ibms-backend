@@ -11,7 +11,7 @@ fun Route.jobRoutes(expireGrace: ExpireGracePeriodAccountsUseCase) {
     route("/admin/jobs") {
         post("/expire-grace") {
             call.authorize(UserRole.SYSADMIN)
-            call.respond(mapOf("expired" to expireGrace()))
+            call.ok(mapOf("expired" to expireGrace()))
         }
     }
 }

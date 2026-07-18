@@ -4,12 +4,16 @@ import com.puregoldbe.ibms.domain.error.DomainError
 import com.puregoldbe.ibms.domain.model.Account
 import com.puregoldbe.ibms.domain.model.CompilableLine
 import com.puregoldbe.ibms.domain.model.CompilablePreview
+import com.puregoldbe.ibms.domain.model.CursorPage
 import com.puregoldbe.ibms.domain.model.Store
 import com.puregoldbe.ibms.domain.model.TopSheet
 import com.puregoldbe.ibms.domain.model.TopSheetDetail
 import com.puregoldbe.ibms.domain.model.TopSheetStatus
 import com.puregoldbe.ibms.domain.port.AccountRepository
+import com.puregoldbe.ibms.domain.port.ActivityRecorder
 import com.puregoldbe.ibms.domain.port.Clock
+import com.puregoldbe.ibms.domain.port.IdempotencyContext
+import com.puregoldbe.ibms.domain.port.IdempotencyKeyRepository
 import com.puregoldbe.ibms.domain.port.InvoiceSequenceRepository
 import com.puregoldbe.ibms.domain.port.NewTopSheetLine
 import com.puregoldbe.ibms.domain.port.ProviderRepository
@@ -101,10 +105,17 @@ class CompileTopSheetUseCase(
     private val providers: ProviderRepository,
     private val topsheets: TopSheetRepository,
     private val sequences: InvoiceSequenceRepository,
+    private val idempotency: IdempotencyKeyRepository,
+    private val activity: ActivityRecorder,
     private val tx: TransactionRunner,
 ) {
-    suspend operator fun invoke(providerId: String, billingPeriod: String, compilerId: String): TopSheet =
-        tx.inTransaction {
+    suspend operator fun invoke(
+        providerId: String,
+        billingPeriod: String,
+        compilerId: String,
+        idem: IdempotencyContext? = null,
+    ): TopSheet = tx.inTransaction {
+        idempotent(idempotency, "topsheet.compile", idem, 201) {
             requirePeriod(billingPeriod)
             val provider = providers.findById(providerId)
                 ?: throw DomainError.NotFound("provider $providerId not found")
@@ -146,16 +157,24 @@ class CompileTopSheetUseCase(
                     ),
                 )
             }
+            activity.record(compilerId, "topsheet.compiled", "topsheet", topsheet.id)
             topsheet
         }
+    }
 }
 
 class ListTopSheetsUseCase(
     private val topsheets: TopSheetRepository,
     private val tx: TransactionRunner,
 ) {
-    suspend operator fun invoke(providerId: String?, billingPeriod: String?, status: TopSheetStatus?): List<TopSheet> =
-        tx.inTransaction { topsheets.list(providerId, billingPeriod, status) }
+    suspend operator fun invoke(
+        providerId: String?,
+        billingPeriod: String?,
+        status: TopSheetStatus?,
+        cursor: String?,
+        limit: Int,
+    ): CursorPage<TopSheet> =
+        tx.inTransaction { topsheets.page(providerId, billingPeriod, status, cursor, limit) }
 }
 
 class GetTopSheetUseCase(
@@ -176,6 +195,7 @@ class GetTopSheetDetailsUseCase(
 /** Finance sign-off: compiled -> approved. */
 class ApproveTopSheetUseCase(
     private val topsheets: TopSheetRepository,
+    private val activity: ActivityRecorder,
     private val clock: Clock,
     private val tx: TransactionRunner,
 ) {
@@ -184,21 +204,27 @@ class ApproveTopSheetUseCase(
         if (ts.status != TopSheetStatus.COMPILED) {
             throw DomainError.Conflict("only compiled topsheets can be approved (was ${ts.status.name.lowercase()})")
         }
-        topsheets.approve(id, approverId, clock.now()) ?: throw DomainError.NotFound("topsheet $id not found")
+        val approved = topsheets.approve(id, approverId, clock.now())
+            ?: throw DomainError.NotFound("topsheet $id not found")
+        activity.record(approverId, "topsheet.approved", "topsheet", id)
+        approved
     }
 }
 
 /** Finance payment: approved -> paid, cascading line items to paid. */
 class PayTopSheetUseCase(
     private val topsheets: TopSheetRepository,
+    private val idempotency: IdempotencyKeyRepository,
     private val clock: Clock,
     private val tx: TransactionRunner,
 ) {
-    suspend operator fun invoke(id: String): TopSheet = tx.inTransaction {
-        val ts = topsheets.findById(id) ?: throw DomainError.NotFound("topsheet $id not found")
-        if (ts.status != TopSheetStatus.APPROVED) {
-            throw DomainError.Conflict("only approved topsheets can be paid (was ${ts.status.name.lowercase()})")
+    suspend operator fun invoke(id: String, idem: IdempotencyContext? = null): TopSheet = tx.inTransaction {
+        idempotent(idempotency, "topsheet.pay", idem, 200) {
+            val ts = topsheets.findById(id) ?: throw DomainError.NotFound("topsheet $id not found")
+            if (ts.status != TopSheetStatus.APPROVED) {
+                throw DomainError.Conflict("only approved topsheets can be paid (was ${ts.status.name.lowercase()})")
+            }
+            topsheets.pay(id, clock.now()) ?: throw DomainError.NotFound("topsheet $id not found")
         }
-        topsheets.pay(id, clock.now()) ?: throw DomainError.NotFound("topsheet $id not found")
     }
 }
