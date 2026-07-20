@@ -5,13 +5,15 @@ import com.puregoldbe.ibms.adapter.db.buildDataSource
 import com.puregoldbe.ibms.adapter.db.connectExposed
 import com.puregoldbe.ibms.adapter.db.migrate
 import com.puregoldbe.ibms.adapter.gateway.ExposedTransactionRunner
-import com.puregoldbe.ibms.adapter.gateway.GoogleTokenVerifierAdapter
 import com.puregoldbe.ibms.adapter.gateway.LocalDiskStorage
 import com.puregoldbe.ibms.adapter.gateway.SimulatedOcrExtractor
 import com.puregoldbe.ibms.adapter.gateway.SystemClock
 import com.puregoldbe.ibms.adapter.repository.*
+import com.puregoldbe.ibms.adapter.security.AUTH_SESSION
+import com.puregoldbe.ibms.adapter.security.BcryptPasswordHasher
 import com.puregoldbe.ibms.adapter.security.JwtService
 import com.puregoldbe.ibms.adapter.security.LocalHmacPresign
+import com.puregoldbe.ibms.adapter.security.SecureRandomSecrets
 import com.puregoldbe.ibms.adapter.security.configureAuthentication
 import com.puregoldbe.ibms.application.usecase.*
 import com.puregoldbe.ibms.infrastructure.config.AppConfig
@@ -24,6 +26,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlin.time.Duration.Companion.hours
+import kotlin.time.Duration.Companion.minutes
 
 /**
  * Composition root: loads config, migrates + connects the DB, constructs the
@@ -42,9 +45,6 @@ fun Application.moduleWith(cfg: AppConfig) {
     if (cfg.jwt.secret == "dev-secret-change-me") {
         log.warn("[security] JWT_SECRET is the built-in default — set a strong secret before production.")
     }
-    if (cfg.devAuthEnabled) {
-        log.warn("[security] DEV_AUTH_ENABLED is on — /auth/dev-login mints tokens without Google. Never enable in production.")
-    }
 
     // --- Database (Hikari + Flyway + Exposed) ---
     val dataSource = buildDataSource(cfg.db)
@@ -55,12 +55,15 @@ fun Application.moduleWith(cfg: AppConfig) {
     val tx = ExposedTransactionRunner(db)
     val clock = SystemClock()
     val storage = LocalDiskStorage(cfg.storageLocalDir)
-    val tokenVerifier = GoogleTokenVerifierAdapter(cfg.googleOauthClientId)
-    val jwtService = JwtService(cfg.jwt)
+    val jwtService = JwtService(cfg.jwt, cfg.auth.passwordChallengeTtlMinutes.minutes)
+    val passwordHasher = BcryptPasswordHasher(cfg.auth.bcryptCost)
+    val secrets = SecureRandomSecrets()
+    val sessionPolicy = cfg.auth.sessionPolicy()
     val presign = LocalHmacPresign(cfg.jwt.secret, cfg.appUrl, clock)
     val ocrGateway = SimulatedOcrExtractor()
 
     val users = ExposedUserRepository()
+    val sessions = ExposedSessionRepository()
     val providers = ExposedProviderRepository()
     val sequences = ExposedInvoiceSequenceRepository()
     val attachments = ExposedAttachmentRepository()
@@ -74,10 +77,20 @@ fun Application.moduleWith(cfg: AppConfig) {
     val ocrBatches = ExposedOcrBatchRepository()
 
     // --- Use cases ---
-    val authGoogle = AuthenticateWithGoogleUseCase(tokenVerifier, users, tx)
-    val authDev = AuthenticateDevUseCase(users, tx)
+    // Every path that ends in "signed in" mints its tokens through one issuer, so
+    // login, first-login password change and refresh cannot drift apart.
+    val sessionIssuer = SessionIssuer(sessions, secrets, jwtService, sessionPolicy)
+    val login = LoginUseCase(users, passwordHasher, jwtService, sessionIssuer, sessionPolicy, clock, tx)
+    val completeFirstLogin = CompleteFirstLoginUseCase(users, sessions, passwordHasher, sessionIssuer, clock, tx)
+    val changeOwnPassword = ChangeOwnPasswordUseCase(users, sessions, passwordHasher, sessionIssuer, clock, tx)
+    val refreshSession = RefreshSessionUseCase(users, sessions, secrets, sessionIssuer, clock, tx)
+    val logout = LogoutUseCase(sessions, clock, tx)
+    val logoutEverywhere = LogoutEverywhereUseCase(sessions, clock, tx)
     val getCurrentUser = GetCurrentUserUseCase(users, tx)
     val listUsers = ListUsersUseCase(users, tx)
+    val provisionUser = ProvisionUserUseCase(users, passwordHasher, secrets, sessionPolicy, clock, tx)
+    val resetUserPassword =
+        ResetUserPasswordUseCase(users, sessions, passwordHasher, secrets, sessionPolicy, clock, tx)
     val updateUserRole = UpdateUserRoleUseCase(users, tx)
     val listProviders = ListProvidersUseCase(providers, tx)
     val createProvider = CreateProviderUseCase(providers, sequences, tx)
@@ -135,14 +148,17 @@ fun Application.moduleWith(cfg: AppConfig) {
         }
     }
 
+    // --- First-run credential for the seeded sysadmin (no-op once one exists) ---
+    installBootstrapAdminCredentials(cfg.auth, users, passwordHasher, secrets, sessionPolicy, clock, tx)
+
     // --- Routes (served at root to match the API_CONTRACT paths) ---
     routing {
-        publicAuthRoutes(authGoogle, authDev, jwtService, cfg.devAuthEnabled)
+        publicAuthRoutes(login, completeFirstLogin, refreshSession)
         // Public, token-gated blob transfer — the presigned URL is the credential.
         attachmentBlobRoutes(storeBlob, readBlob)
-        authenticate("auth-jwt") {
-            securedAuthRoutes(getCurrentUser, jwtService)
-            userRoutes(getCurrentUser, listUsers, updateUserRole)
+        authenticate(AUTH_SESSION) {
+            securedAuthRoutes(getCurrentUser, changeOwnPassword, logout, logoutEverywhere)
+            userRoutes(getCurrentUser, listUsers, provisionUser, resetUserPassword, updateUserRole)
             providerRoutes(listProviders, createProvider, updateProvider, deactivateProvider)
             storeRoutes(listStores, getStore, createStore, updateStore, closeStore, getFloating)
             accountRoutes(listAccounts, getAccount, createAccount, updateAccount, transferAccount, deactivateAccount)

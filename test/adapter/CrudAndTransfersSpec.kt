@@ -1,5 +1,6 @@
 package com.puregoldbe.ibms.adapter
 
+import com.puregoldbe.ibms.support.signIn
 import com.puregoldbe.ibms.support.testModule
 import io.kotest.core.spec.style.BehaviorSpec
 import io.kotest.matchers.shouldBe
@@ -22,10 +23,7 @@ class CrudAndTransfersSpec : BehaviorSpec({
                 testApplication {
                     application { testModule() }
 
-                    val token = client.post("/auth/dev-login") {
-                        contentType(ContentType.Application.Json)
-                        setBody("""{"email":"mike.pgmobiledev@gmail.com"}""")
-                    }.bodyAsText().asJson()["data"]!!.jsonObject["token"]!!.jsonPrimitive.content
+                    val token = signIn().token
 
                     val created = client.post("/providers") {
                         header(HttpHeaders.Authorization, "Bearer $token")

@@ -18,6 +18,7 @@ WORKDIR /app
 COPY --from=build /app/build/libs/ibms-backend-all.jar app.jar
 EXPOSE 8080
 # All configuration comes from environment variables — see .env.example
-# (DB_URL, DB_USER, DB_PASSWORD, JWT_SECRET, GOOGLE_OAUTH_CLIENT_ID, STORAGE_LOCAL_DIR, ...).
+# (DB_URL, DB_USER, DB_PASSWORD, JWT_SECRET, BCRYPT_COST, BOOTSTRAP_ADMIN_PASSWORD,
+#  STORAGE_LOCAL_DIR, ...).
 # Flyway migrations run automatically at startup.
 ENTRYPOINT ["java", "-jar", "app.jar"]

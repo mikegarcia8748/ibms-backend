@@ -21,7 +21,14 @@ class UpdateUserRoleUseCaseSpec : BehaviorSpec({
     val users = mockk<UserRepository>(relaxed = false)
     val useCase = UpdateUserRoleUseCase(users, ImmediateTransactionRunner())
 
-    val admin = UserProfile(id = "u1", email = "admin@x.com", name = "Admin", role = UserRole.SYSADMIN)
+    val admin = UserProfile(
+        id = "u1",
+        username = "admin",
+        email = "admin@x.com",
+        name = "Admin",
+        role = UserRole.SYSADMIN,
+        mustChangePassword = false,
+    )
 
     Given("the target is the only sysadmin") {
         every { users.findById("u1") } returns admin

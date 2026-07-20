@@ -1,5 +1,6 @@
 package com.puregoldbe.ibms.domain.port
 
+import com.puregoldbe.ibms.domain.model.UserProfile
 import kotlinx.datetime.Instant
 
 /**
@@ -47,14 +48,53 @@ interface PresignPort {
     fun isValid(attachmentId: String, op: PresignOp, token: String): Boolean
 }
 
-/** Verifies a Google OIDC ID token server-side and returns the identity. */
-interface TokenVerifierPort {
-    /** @return the verified identity, or null if the token is invalid/expired. */
-    fun verify(idToken: String): VerifiedGoogleIdentity?
+/**
+ * One-way password hashing. A port so use cases never name a specific algorithm
+ * and specs can substitute a trivial hasher — bcrypt at production cost factors
+ * takes ~100ms per call by design, which would dominate a test suite.
+ */
+interface PasswordHasher {
+    fun hash(raw: String): String
+
+    /** Constant-time comparison of [raw] against a stored [hash]; false if [hash] is malformed. */
+    fun verify(raw: String, hash: String): Boolean
 }
 
-data class VerifiedGoogleIdentity(
-    val sub: String,
-    val email: String,
-    val name: String?,
-)
+/**
+ * Generation and fingerprinting of the secrets auth hands out. Fingerprinting
+ * lives here rather than on [PasswordHasher] because refresh tokens are already
+ * high-entropy: they want a fast one-way digest for lookup, not a deliberately
+ * slow password hash.
+ */
+interface SecretGenerator {
+    /**
+     * A temporary password an admin can read aloud or paste into a message —
+     * high entropy, but drawn from an alphabet without look-alike characters.
+     */
+    fun temporaryPassword(): String
+
+    /** An opaque, URL-safe, high-entropy refresh token. */
+    fun refreshToken(): String
+
+    /** Stable one-way digest of [token], the only form stored at rest. */
+    fun fingerprint(token: String): String
+}
+
+/**
+ * Mints the bearer tokens the API accepts. A port so the auth use cases stay free
+ * of JWT types, and so token lifetimes are declared in one place rather than
+ * recomputed by every caller that has to report `expiresInSeconds`.
+ */
+interface AuthTokenIssuer {
+    /** Access token for an established session; [sessionId] rides along as the `sid` claim. */
+    fun accessToken(user: UserProfile, sessionId: String): String
+
+    /**
+     * Single-purpose token authorizing only `POST /auth/password/change`. Must be
+     * rejected by every other authenticated route.
+     */
+    fun passwordChangeChallenge(userId: String): String
+
+    val accessTtlSeconds: Long
+    val challengeTtlSeconds: Long
+}

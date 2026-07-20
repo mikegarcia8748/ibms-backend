@@ -12,13 +12,67 @@ import kotlinx.datetime.Instant
 interface UserRepository {
     fun findById(id: String): UserProfile?
     fun findByEmail(email: String): UserProfile?
-    fun findByGoogleSub(googleSub: String): UserProfile?
+    fun findByUsername(username: String): UserProfile?
     fun list(role: UserRole?): List<UserProfile>
     fun page(role: UserRole?, cursor: String?, limit: Int): CursorPage<UserProfile>
     fun countByRole(role: UserRole): Int
-    fun create(email: String, name: String, googleSub: String?, role: UserRole): UserProfile
+    fun existsByUsername(username: String): Boolean
+    fun existsByEmail(email: String): Boolean
+
+    /** Insert a provisioned account carrying its temporary password hash. */
+    fun create(input: ProvisionUserRequest, passwordHash: String, tempPasswordExpiresAt: Instant, at: Instant): UserProfile
+
     fun updateRole(id: String, role: UserRole): UserProfile?
-    fun updateGoogleSub(id: String, googleSub: String): UserProfile?
+
+    // --- credential access (hashes; never expose these through a controller) ---
+    fun credentialsByUsername(username: String): UserCredentials?
+    fun credentialsById(id: String): UserCredentials?
+
+    /**
+     * Replace the stored hash. [tempPasswordExpiresAt] is non-null only when
+     * setting a temporary password, which is also the only case where
+     * [mustChangePassword] is true. Clears any accumulated lockout.
+     */
+    fun setPassword(
+        id: String,
+        passwordHash: String,
+        mustChangePassword: Boolean,
+        tempPasswordExpiresAt: Instant?,
+        at: Instant,
+    ): UserProfile?
+
+    /** Record a rejected login; [lockedUntil] non-null once the threshold is crossed. */
+    fun recordFailedLogin(id: String, attempts: Int, lockedUntil: Instant?)
+
+    /** Reset the failure counter and lockout after a successful login. */
+    fun clearLoginFailures(id: String)
+}
+
+/**
+ * Server-side sessions backing refresh-token rotation. Tokens are looked up by
+ * fingerprint, so this port never sees a usable credential.
+ */
+interface SessionRepository {
+    fun create(
+        userId: String,
+        refreshTokenHash: String,
+        issuedAt: Instant,
+        expiresAt: Instant,
+        userAgent: String?,
+        ipAddress: String?,
+    ): Session
+
+    /** Find a session by token fingerprint, excluding revoked and expired rows. */
+    fun findLiveByHash(refreshTokenHash: String, now: Instant): Session?
+
+    fun findById(id: String): Session?
+
+    fun revoke(id: String, at: Instant): Boolean
+
+    /** Revoke every live session for a user (logout-everywhere, password reset). */
+    fun revokeAllForUser(userId: String, at: Instant): Int
+
+    fun touch(id: String, at: Instant)
 }
 
 interface ProviderRepository {

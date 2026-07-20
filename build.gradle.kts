@@ -52,7 +52,7 @@ dependencies {
     // --- Shared domain ---
     implementation(libs.kotlinx.datetime)
     // --- Auth ---
-    implementation(libs.google.api.client)
+    implementation(libs.bcrypt)
     // --- Excel export ---
     implementation(libs.poi.ooxml)
     // --- Logging / metrics ---

@@ -1,5 +1,8 @@
 package com.puregoldbe.ibms.adapter
 
+import com.puregoldbe.ibms.domain.model.UserRole
+import com.puregoldbe.ibms.support.TEST_PASSWORD
+import com.puregoldbe.ibms.support.signIn
 import com.puregoldbe.ibms.support.testModule
 import io.kotest.core.spec.style.BehaviorSpec
 import io.kotest.matchers.shouldBe
@@ -25,17 +28,18 @@ class HttpEnvelopeSpec : BehaviorSpec({
                 testApplication {
                     application { testModule() }
 
-                    // --- success envelope + JWT mint (dev-login) ---
-                    val login = client.post("/auth/dev-login") {
+                    // --- success envelope + token mint (real login) ---
+                    val seeded = signIn(UserRole.SYSADMIN)
+                    val login = client.post("/auth/login") {
                         contentType(ContentType.Application.Json)
-                        setBody("""{"email":"mike.pgmobiledev@gmail.com"}""")
+                        setBody("""{"username":"${seeded.username}","password":"$TEST_PASSWORD"}""")
                     }
                     login.status shouldBe HttpStatusCode.OK
                     val loginBody = login.bodyAsText().asJson()
                     loginBody["result"]!!.jsonPrimitive.content shouldBe "success"
                     loginBody["status"]!!.jsonPrimitive.content shouldBe "200"
                     val data = loginBody["data"]!!.jsonObject
-                    val token = data["token"]!!.jsonPrimitive.content
+                    val token = data["session"]!!.jsonObject["accessToken"]!!.jsonPrimitive.content
                     token.isNotBlank() shouldBe true
                     data["user"]!!.jsonObject["role"]!!.jsonPrimitive.content shouldBe "sysadmin"
 
@@ -57,7 +61,7 @@ class HttpEnvelopeSpec : BehaviorSpec({
                     me.status shouldBe HttpStatusCode.OK
                     val meBody = me.bodyAsText().asJson()
                     meBody["result"]!!.jsonPrimitive.content shouldBe "success"
-                    meBody["data"]!!.jsonObject["email"]!!.jsonPrimitive.content shouldBe "mike.pgmobiledev@gmail.com"
+                    meBody["data"]!!.jsonObject["email"]!!.jsonPrimitive.content shouldBe seeded.email
 
                     // --- enveloped 401 from the JWT challenge (no token) ---
                     val noAuth = client.get("/users")
@@ -68,9 +72,8 @@ class HttpEnvelopeSpec : BehaviorSpec({
                     noAuthBody["data"] shouldBe JsonNull
 
                     // --- enveloped domain error (404) ---
-                    val notFound = client.post("/auth/dev-login") {
-                        contentType(ContentType.Application.Json)
-                        setBody("""{"email":"nobody@example.com"}""")
+                    val notFound = client.get("/stores/00000000-0000-0000-0000-000000000000") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
                     }
                     notFound.status shouldBe HttpStatusCode.NotFound
                     val nfBody = notFound.bodyAsText().asJson()

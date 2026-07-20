@@ -1,5 +1,6 @@
 package com.puregoldbe.ibms.adapter
 
+import com.puregoldbe.ibms.support.signIn
 import com.puregoldbe.ibms.support.testModule
 import io.kotest.core.spec.style.BehaviorSpec
 import io.kotest.matchers.shouldBe
@@ -23,11 +24,7 @@ class PaginationSpec : BehaviorSpec({
                 testApplication {
                     application { testModule() }
 
-                    val login = client.post("/auth/dev-login") {
-                        contentType(ContentType.Application.Json)
-                        setBody("""{"email":"mike.pgmobiledev@gmail.com"}""")
-                    }
-                    val token = login.bodyAsText().asJson()["data"]!!.jsonObject["token"]!!.jsonPrimitive.content
+                    val token = signIn().token
 
                     // create a known set of providers
                     val createdIds = (1..3).map { i ->

@@ -8,14 +8,17 @@ import com.puregoldbe.ibms.adapter.repository.ExposedStoreRepository
 import com.puregoldbe.ibms.adapter.repository.ExposedUserRepository
 import com.puregoldbe.ibms.domain.model.AccountUpsertRequest
 import com.puregoldbe.ibms.domain.model.AttachmentPurpose
+import com.puregoldbe.ibms.domain.model.ProvisionUserRequest
 import com.puregoldbe.ibms.domain.model.StoreStatus
 import com.puregoldbe.ibms.domain.model.StoreType
 import com.puregoldbe.ibms.domain.model.StoreUpsertRequest
 import com.puregoldbe.ibms.domain.model.UserRole
 import com.puregoldbe.ibms.support.PostgresTestDb
 import io.kotest.core.spec.style.BehaviorSpec
+import io.kotest.matchers.ints.shouldBeGreaterThanOrEqual
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
+import kotlinx.datetime.Instant
 import kotlinx.datetime.LocalDate
 import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 
@@ -36,10 +39,13 @@ class ExposedRepositorySpec : BehaviorSpec({
 
     Given("the migrated schema and the bootstrap admin seed") {
         When("querying the seeded sysadmin") {
-            Then("V3 seeded exactly one sysadmin") {
+            Then("V3's bootstrap admin exists and is a sysadmin") {
                 transaction(db) {
-                    users.countByRole(UserRole.SYSADMIN) shouldBe 1
-                    users.findByEmail("mike.pgmobiledev@gmail.com").shouldNotBeNull()
+                    val admin = users.findByEmail("mike.pgmobiledev@gmail.com").shouldNotBeNull()
+                    admin.role shouldBe UserRole.SYSADMIN
+                    // Not an exact count: specs share one container, and any spec
+                    // that calls signIn(SYSADMIN) adds another sysadmin row.
+                    users.countByRole(UserRole.SYSADMIN) shouldBeGreaterThanOrEqual 1
                 }
             }
         }
@@ -49,8 +55,20 @@ class ExposedRepositorySpec : BehaviorSpec({
         When("creating user -> attachment -> store -> provider -> account") {
             Then("every entity round-trips with correct enum/money/date mapping") {
                 transaction(db) {
-                    val secretary = users.create("sec@puregold.com", "Sec One", googleSub = null, role = UserRole.SECRETARY)
+                    val secretary = users.create(
+                        input = ProvisionUserRequest(
+                            username = "sec.one",
+                            email = "sec@puregold.com",
+                            name = "Sec One",
+                            role = UserRole.SECRETARY,
+                        ),
+                        passwordHash = "\$2a\$04\$notarealhashbutthecolumnonlyholdstext000000000000000",
+                        tempPasswordExpiresAt = Instant.fromEpochSeconds(1_800_000_000),
+                        at = Instant.fromEpochSeconds(1_700_000_000),
+                    )
                     secretary.role shouldBe UserRole.SECRETARY
+                    // Provisioning always starts in the temporary-password state.
+                    secretary.mustChangePassword shouldBe true
 
                     val proof = attachments.create(
                         purpose = AttachmentPurpose.INSTALLATION_PROOF,

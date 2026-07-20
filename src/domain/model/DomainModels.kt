@@ -91,9 +91,15 @@ enum class AttachmentPurpose {
 // =====================================================================
 //  Core entities (API representations)
 // =====================================================================
+/**
+ * The public view of a user. `mustChangePassword` carries no default so it is
+ * always on the wire — clients branch on it to route into the change-password
+ * screen, and a silently-omitted `false` would be indistinguishable from absent.
+ */
 @Serializable
 data class UserProfile(
     val id: String,
+    val username: String,
     val email: String,
     val name: String,
     val firstName: String? = null,
@@ -101,6 +107,7 @@ data class UserProfile(
     val lastName: String? = null,
     val employeeNumber: String? = null,
     val role: UserRole,
+    val mustChangePassword: Boolean,
 )
 
 @Serializable
@@ -218,11 +225,91 @@ data class Activity(
 // =====================================================================
 //  Request / command DTOs  (the write side of the API)
 // =====================================================================
+// ---------------------------------------------------------------------
+//  Authentication
+//
+//  Accounts are provisioned by a sysadmin, never self-registered. The holder
+//  of a temporary password is NOT yet authenticated: logging in with one
+//  returns a change-password challenge instead of a session, and only the
+//  successful password change mints tokens. Response types deliberately carry
+//  no defaults — the app's kotlinx `json()` runs with encodeDefaults=false, so
+//  a defaulted field would silently drop off the wire.
+// ---------------------------------------------------------------------
 @Serializable
-data class GoogleAuthRequest(val idToken: String)
+data class LoginRequest(val username: String, val password: String)
 
 @Serializable
-data class AuthResponse(val token: String, val user: UserProfile)
+enum class LoginOutcome {
+    /** Credentials accepted and a session exists — `session` is populated. */
+    @SerialName("authenticated") AUTHENTICATED,
+
+    /** Temporary password accepted — `passwordChange` is populated, no session yet. */
+    @SerialName("password_change_required") PASSWORD_CHANGE_REQUIRED,
+}
+
+@Serializable
+data class LoginResponse(
+    val outcome: LoginOutcome,
+    val user: UserProfile,
+    val session: SessionTokens?,
+    val passwordChange: PasswordChangeChallenge?,
+)
+
+@Serializable
+data class SessionTokens(
+    val accessToken: String,
+    val refreshToken: String,
+    val tokenType: String,
+    val expiresInSeconds: Long,
+)
+
+/**
+ * Hands back a single-purpose token that authorizes exactly one call to
+ * `POST /auth/password/change`. It cannot be used as a bearer token anywhere
+ * else — see the `typ` claim check in the auth adapter.
+ */
+@Serializable
+data class PasswordChangeChallenge(
+    val challengeToken: String,
+    val expiresInSeconds: Long,
+    val reason: String,
+)
+
+/** Redeems a change-password challenge; authorized by the challenge token. */
+@Serializable
+data class ChangePasswordRequest(val newPassword: String)
+
+/** Self-service rotation by an already-authenticated user. */
+@Serializable
+data class ChangeOwnPasswordRequest(val currentPassword: String, val newPassword: String)
+
+@Serializable
+data class RefreshRequest(val refreshToken: String)
+
+/** Sysadmin-only account provisioning. The temporary password is generated server-side. */
+@Serializable
+data class ProvisionUserRequest(
+    val username: String,
+    val email: String,
+    val name: String,
+    val firstName: String? = null,
+    val middleInitial: String? = null,
+    val lastName: String? = null,
+    val employeeNumber: String? = null,
+    val role: UserRole = UserRole.PENDING,
+)
+
+/**
+ * The only time a temporary password is ever readable. It is stored as a bcrypt
+ * hash, so neither this backend nor the database can reproduce it afterwards —
+ * if the admin loses it, the account must be reset.
+ */
+@Serializable
+data class ProvisionedUser(
+    val user: UserProfile,
+    val temporaryPassword: String,
+    val temporaryPasswordExpiresAt: Instant,
+)
 
 @Serializable
 data class UpdateRoleRequest(val role: UserRole)

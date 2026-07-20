@@ -36,17 +36,35 @@ private inline fun <reified T : Enum<T>> Table.pgEnum(columnName: String, pgType
     )
 
 object Users : UUIDTable("users") {
-    val googleSub      = text("google_sub").uniqueIndex().nullable()
-    val email          = text("email").uniqueIndex()
-    val name           = text("name")
-    val firstName      = text("first_name").nullable()
-    val middleInitial  = text("middle_initial").nullable()
-    val lastName       = text("last_name").nullable()
-    val employeeNumber = text("employee_number").nullable()
-    val role           = pgEnum<UserRole>("role", "user_role")
-    val legacyId       = text("legacy_id").uniqueIndex().nullable()
-    val createdAt      = timestamp("created_at")
-    val updatedAt      = timestamp("updated_at")
+    val username              = text("username").uniqueIndex()
+    val email                 = text("email").uniqueIndex()
+    val name                  = text("name")
+    val firstName             = text("first_name").nullable()
+    val middleInitial         = text("middle_initial").nullable()
+    val lastName              = text("last_name").nullable()
+    val employeeNumber        = text("employee_number").nullable()
+    val role                  = pgEnum<UserRole>("role", "user_role")
+    // --- credentials (V6); never select these into a wire DTO ---
+    val passwordHash          = text("password_hash").nullable()
+    val mustChangePassword    = bool("must_change_password")
+    val tempPasswordExpiresAt = timestamp("temp_password_expires_at").nullable()
+    val passwordUpdatedAt     = timestamp("password_updated_at").nullable()
+    val failedLoginAttempts   = integer("failed_login_attempts")
+    val lockedUntil           = timestamp("locked_until").nullable()
+    val legacyId              = text("legacy_id").uniqueIndex().nullable()
+    val createdAt             = timestamp("created_at")
+    val updatedAt             = timestamp("updated_at")
+}
+
+object Sessions : UUIDTable("sessions") {
+    val userId           = reference("user_id", Users)
+    val refreshTokenHash = text("refresh_token_hash").uniqueIndex()
+    val issuedAt         = timestamp("issued_at")
+    val expiresAt        = timestamp("expires_at")
+    val lastUsedAt       = timestamp("last_used_at").nullable()
+    val revokedAt        = timestamp("revoked_at").nullable()
+    val userAgent        = text("user_agent").nullable()
+    val ipAddress        = text("ip_address").nullable()
 }
 
 object Providers : UUIDTable("providers") {
