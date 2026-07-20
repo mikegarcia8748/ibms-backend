@@ -26,7 +26,7 @@ fun testAppConfig(): AppConfig = AppConfig(
         passwordChallengeTtlMinutes = 10,
         maxFailedLogins = 5,
         lockoutMinutes = 15,
-        bootstrapAdminEmail = "mike.pgmobiledev@gmail.com",
+        bootstrapAdminUsername = "mikepg",
         bootstrapAdminPassword = "TestBootstrapPw9",
     ),
     storageLocalDir = System.getProperty("java.io.tmpdir").trimEnd('/') + "/ibms-test-storage",

@@ -11,18 +11,17 @@ import kotlinx.datetime.Instant
 
 interface UserRepository {
     fun findById(id: String): UserProfile?
-    fun findByEmail(email: String): UserProfile?
     fun findByUsername(username: String): UserProfile?
-    fun list(role: UserRole?): List<UserProfile>
-    fun page(role: UserRole?, cursor: String?, limit: Int): CursorPage<UserProfile>
+    fun list(role: UserRole?, status: UserStatus?): List<UserProfile>
+    fun page(role: UserRole?, status: UserStatus?, cursor: String?, limit: Int): CursorPage<UserProfile>
     fun countByRole(role: UserRole): Int
     fun existsByUsername(username: String): Boolean
-    fun existsByEmail(email: String): Boolean
 
     /** Insert a provisioned account carrying its temporary password hash. */
     fun create(input: ProvisionUserRequest, passwordHash: String, tempPasswordExpiresAt: Instant, at: Instant): UserProfile
 
     fun updateRole(id: String, role: UserRole): UserProfile?
+    fun updateStatus(id: String, status: UserStatus): UserProfile?
 
     // --- credential access (hashes; never expose these through a controller) ---
     fun credentialsByUsername(username: String): UserCredentials?

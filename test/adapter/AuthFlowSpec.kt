@@ -30,7 +30,6 @@ class AuthFlowSpec : BehaviorSpec({
     // Unique per run so repeated suites never collide on the unique indexes.
     val suffix = System.nanoTime().toString().takeLast(12)
     val username = "prov$suffix"
-    val email = "prov$suffix@puregold.com"
     val newPassword = "Chosen-Passw0rd!"
 
     Given("a sysadmin provisioning an account") {
@@ -46,7 +45,7 @@ class AuthFlowSpec : BehaviorSpec({
                         header(HttpHeaders.Authorization, "Bearer $adminToken")
                         contentType(ContentType.Application.Json)
                         setBody(
-                            """{"username":"$username","email":"$email","name":"Provisioned User","role":"secretary"}""",
+                            """{"username":"$username","name":"Provisioned User","role":"secretary"}""",
                         )
                     }
                     provision.status shouldBe HttpStatusCode.Created
@@ -58,7 +57,7 @@ class AuthFlowSpec : BehaviorSpec({
                     // Provisioning is sysadmin-only.
                     client.post("/users") {
                         contentType(ContentType.Application.Json)
-                        setBody("""{"username":"nope$suffix","email":"nope$suffix@x.com","name":"No"}""")
+                        setBody("""{"username":"nope$suffix","name":"No"}""")
                     }.status shouldBe HttpStatusCode.Unauthorized
 
                     // --- 2. Logging in with the temporary password -----------
@@ -198,7 +197,7 @@ class AuthFlowSpec : BehaviorSpec({
                         header(HttpHeaders.Authorization, "Bearer $adminToken")
                         contentType(ContentType.Application.Json)
                         setBody(
-                            """{"username":"$resetUser","email":"$resetUser@puregold.com","name":"Reset Me","role":"payables"}""",
+                            """{"username":"$resetUser","name":"Reset Me","role":"payables"}""",
                         )
                     }.bodyAsText().asJson().data()
                     val userId = provisioned["user"]!!.jsonObject.str("id")

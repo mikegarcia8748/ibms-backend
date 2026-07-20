@@ -92,6 +92,7 @@ fun Application.moduleWith(cfg: AppConfig) {
     val resetUserPassword =
         ResetUserPasswordUseCase(users, sessions, passwordHasher, secrets, sessionPolicy, clock, tx)
     val updateUserRole = UpdateUserRoleUseCase(users, tx)
+    val updateUserStatus = UpdateUserStatusUseCase(users, tx)
     val listProviders = ListProvidersUseCase(providers, tx)
     val createProvider = CreateProviderUseCase(providers, sequences, tx)
     val updateProvider = UpdateProviderUseCase(providers, tx)
@@ -158,7 +159,7 @@ fun Application.moduleWith(cfg: AppConfig) {
         attachmentBlobRoutes(storeBlob, readBlob)
         authenticate(AUTH_SESSION) {
             securedAuthRoutes(getCurrentUser, changeOwnPassword, logout, logoutEverywhere)
-            userRoutes(getCurrentUser, listUsers, provisionUser, resetUserPassword, updateUserRole)
+            userRoutes(getCurrentUser, listUsers, provisionUser, resetUserPassword, updateUserRole, updateUserStatus)
             providerRoutes(listProviders, createProvider, updateProvider, deactivateProvider)
             storeRoutes(listStores, getStore, createStore, updateStore, closeStore, getFloating)
             accountRoutes(listAccounts, getAccount, createAccount, updateAccount, transferAccount, deactivateAccount)

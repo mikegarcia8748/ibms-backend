@@ -6,8 +6,10 @@ import com.puregoldbe.ibms.application.usecase.ListUsersUseCase
 import com.puregoldbe.ibms.application.usecase.ProvisionUserUseCase
 import com.puregoldbe.ibms.application.usecase.ResetUserPasswordUseCase
 import com.puregoldbe.ibms.application.usecase.UpdateUserRoleUseCase
+import com.puregoldbe.ibms.application.usecase.UpdateUserStatusUseCase
 import com.puregoldbe.ibms.domain.model.ProvisionUserRequest
 import com.puregoldbe.ibms.domain.model.UpdateRoleRequest
+import com.puregoldbe.ibms.domain.model.UpdateUserStatusRequest
 import com.puregoldbe.ibms.domain.model.UserRole
 import io.ktor.server.request.*
 import io.ktor.server.routing.*
@@ -18,6 +20,7 @@ fun Route.userRoutes(
     provisionUser: ProvisionUserUseCase,
     resetUserPassword: ResetUserPasswordUseCase,
     updateUserRole: UpdateUserRoleUseCase,
+    updateUserStatus: UpdateUserStatusUseCase,
 ) {
     route("/users") {
         get("/me") {
@@ -27,7 +30,14 @@ fun Route.userRoutes(
         get {
             call.authorize(UserRole.SYSADMIN)
             val p = call.pageParams()
-            call.ok(listUsers(parseUserRole(call.request.queryParameters["role"]), p.cursor, p.limit))
+            call.ok(
+                listUsers(
+                    parseUserRole(call.request.queryParameters["role"]),
+                    parseUserStatus(call.request.queryParameters["status"]),
+                    p.cursor,
+                    p.limit,
+                ),
+            )
         }
         // Account creation is an admin act, not self-registration. The response
         // carries the generated temporary password — the one and only time it is
@@ -46,6 +56,11 @@ fun Route.userRoutes(
             call.authorize(UserRole.SYSADMIN)
             val req = call.receive<UpdateRoleRequest>()
             call.ok(updateUserRole(call.pathId(), req.role))
+        }
+        patch("/{id}/status") {
+            call.authorize(UserRole.SYSADMIN)
+            val req = call.receive<UpdateUserStatusRequest>()
+            call.ok(updateUserStatus(call.pathId(), req.status))
         }
     }
 }

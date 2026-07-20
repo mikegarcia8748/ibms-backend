@@ -41,7 +41,7 @@ class ExposedRepositorySpec : BehaviorSpec({
         When("querying the seeded sysadmin") {
             Then("V3's bootstrap admin exists and is a sysadmin") {
                 transaction(db) {
-                    val admin = users.findByEmail("mike.pgmobiledev@gmail.com").shouldNotBeNull()
+                    val admin = users.findByUsername("mikepg").shouldNotBeNull()
                     admin.role shouldBe UserRole.SYSADMIN
                     // Not an exact count: specs share one container, and any spec
                     // that calls signIn(SYSADMIN) adds another sysadmin row.
@@ -58,7 +58,6 @@ class ExposedRepositorySpec : BehaviorSpec({
                     val secretary = users.create(
                         input = ProvisionUserRequest(
                             username = "sec.one",
-                            email = "sec@puregold.com",
                             name = "Sec One",
                             role = UserRole.SECRETARY,
                         ),

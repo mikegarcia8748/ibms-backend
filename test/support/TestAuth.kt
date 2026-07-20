@@ -41,7 +41,6 @@ data class TestSession(
     val token: String,
     val userId: String,
     val username: String,
-    val email: String,
 )
 
 /**
@@ -51,7 +50,6 @@ data class TestSession(
  */
 suspend fun ApplicationTestBuilder.signIn(role: UserRole = UserRole.SYSADMIN): TestSession {
     val suffix = "${role.name.lowercase().take(4)}${System.nanoTime().toString().takeLast(11)}"
-    val email = "$suffix@puregold.com"
 
     val userId = transaction(PostgresTestDb.database) {
         val now = Clock.System.now()
@@ -59,7 +57,6 @@ suspend fun ApplicationTestBuilder.signIn(role: UserRole = UserRole.SYSADMIN): T
         val created = users.create(
             input = ProvisionUserRequest(
                 username = suffix,
-                email = email,
                 name = "Spec ${role.name.lowercase()}",
                 role = role,
             ),
@@ -90,5 +87,5 @@ suspend fun ApplicationTestBuilder.signIn(role: UserRole = UserRole.SYSADMIN): T
     val token = Json.parseToJsonElement(response.bodyAsText()).jsonObject["data"]!!
         .jsonObject["session"]!!.jsonObject["accessToken"]!!.jsonPrimitive.content
 
-    return TestSession(token = token, userId = userId, username = suffix, email = email)
+    return TestSession(token = token, userId = userId, username = suffix)
 }
