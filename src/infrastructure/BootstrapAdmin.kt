@@ -33,7 +33,7 @@ fun Application.installBootstrapAdminCredentials(
     val outcome = runCatching {
         kotlinx.coroutines.runBlocking {
             tx.inTransaction {
-                val admin = users.findByEmail(cfg.bootstrapAdminEmail)
+                val admin = users.findByUsername(cfg.bootstrapAdminUsername)
                     ?: return@inTransaction BootstrapOutcome.NoSuchUser
                 if (users.credentialsById(admin.id)?.passwordHash != null) {
                     return@inTransaction BootstrapOutcome.AlreadyProvisioned
@@ -60,7 +60,7 @@ fun Application.installBootstrapAdminCredentials(
     when (outcome) {
         is BootstrapOutcome.AlreadyProvisioned -> Unit
         is BootstrapOutcome.NoSuchUser ->
-            log.warn("[bootstrap] no user with email ${cfg.bootstrapAdminEmail} — set BOOTSTRAP_ADMIN_EMAIL to an existing account.")
+            log.warn("[bootstrap] no user with username ${cfg.bootstrapAdminUsername} — set BOOTSTRAP_ADMIN_USERNAME to an existing account.")
         is BootstrapOutcome.Installed -> if (outcome.generatedPassword == null) {
             log.info(
                 "[bootstrap] installed the BOOTSTRAP_ADMIN_PASSWORD for '{}'. It must be changed at first login.",

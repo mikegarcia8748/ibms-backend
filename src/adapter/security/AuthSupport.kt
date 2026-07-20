@@ -21,7 +21,6 @@ import kotlin.time.Duration
 data class AuthenticatedUser(
     val userId: String,
     val username: String,
-    val email: String,
     val role: UserRole,
     /** The session this token belongs to — what logout revokes. */
     val sessionId: String,
@@ -51,7 +50,6 @@ class JwtService(
         base(user.id, TYPE_ACCESS, accessTtlSeconds)
             .withClaim(CLAIM_SESSION_ID, sessionId)
             .withClaim("username", user.username)
-            .withClaim("email", user.email)
             .withClaim("role", user.role.name.lowercase())
             .sign(algorithm)
 
@@ -141,7 +139,6 @@ fun ApplicationCall.authenticatedUserOrNull(): AuthenticatedUser? {
     return AuthenticatedUser(
         userId = userId,
         username = principal.payload.getClaim("username").asString() ?: "",
-        email = principal.payload.getClaim("email").asString() ?: "",
         role = role,
         sessionId = sessionId,
     )

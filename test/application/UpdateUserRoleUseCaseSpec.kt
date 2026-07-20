@@ -24,7 +24,6 @@ class UpdateUserRoleUseCaseSpec : BehaviorSpec({
     val admin = UserProfile(
         id = "u1",
         username = "admin",
-        email = "admin@x.com",
         name = "Admin",
         role = UserRole.SYSADMIN,
         mustChangePassword = false,

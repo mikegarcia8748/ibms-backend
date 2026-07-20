@@ -61,7 +61,7 @@ class HttpEnvelopeSpec : BehaviorSpec({
                     me.status shouldBe HttpStatusCode.OK
                     val meBody = me.bodyAsText().asJson()
                     meBody["result"]!!.jsonPrimitive.content shouldBe "success"
-                    meBody["data"]!!.jsonObject["email"]!!.jsonPrimitive.content shouldBe seeded.email
+                    meBody["data"]!!.jsonObject["username"]!!.jsonPrimitive.content shouldBe seeded.username
 
                     // --- enveloped 401 from the JWT challenge (no token) ---
                     val noAuth = client.get("/users")

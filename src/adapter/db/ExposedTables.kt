@@ -37,13 +37,14 @@ private inline fun <reified T : Enum<T>> Table.pgEnum(columnName: String, pgType
 
 object Users : UUIDTable("users") {
     val username              = text("username").uniqueIndex()
-    val email                 = text("email").uniqueIndex()
+    val email                 = text("email").nullable()
     val name                  = text("name")
     val firstName             = text("first_name").nullable()
     val middleInitial         = text("middle_initial").nullable()
     val lastName              = text("last_name").nullable()
     val employeeNumber        = text("employee_number").nullable()
     val role                  = pgEnum<UserRole>("role", "user_role")
+    val status                = pgEnum<UserStatus>("status", "user_status")
     // --- credentials (V6); never select these into a wire DTO ---
     val passwordHash          = text("password_hash").nullable()
     val mustChangePassword    = bool("must_change_password")

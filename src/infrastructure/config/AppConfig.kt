@@ -37,7 +37,7 @@ data class AuthConfig(
     val passwordChallengeTtlMinutes: Long,
     val maxFailedLogins: Int,
     val lockoutMinutes: Long,
-    val bootstrapAdminEmail: String,
+    val bootstrapAdminUsername: String,
     val bootstrapAdminPassword: String?,
 ) {
     fun sessionPolicy(): SessionPolicy = SessionPolicy(
@@ -83,8 +83,8 @@ data class AppConfig(
                 passwordChallengeTtlMinutes = env("PASSWORD_CHALLENGE_TTL_MINUTES", "10")!!.toLong(),
                 maxFailedLogins = env("MAX_FAILED_LOGINS", "5")!!.toInt(),
                 lockoutMinutes = env("LOGIN_LOCKOUT_MINUTES", "15")!!.toLong(),
-                bootstrapAdminEmail = env("BOOTSTRAP_ADMIN_EMAIL", "mike.pgmobiledev@gmail.com")!!,
-                bootstrapAdminPassword = env("BOOTSTRAP_ADMIN_PASSWORD"),
+                bootstrapAdminUsername = env("BOOTSTRAP_ADMIN_USERNAME", "mikepg")!!,
+                bootstrapAdminPassword = env("BOOTSTRAP_ADMIN_PASSWORD", "Password@123"),
             ),
             storageLocalDir = env("STORAGE_LOCAL_DIR", "./storage")!!,
             corsAllowedHosts = env("CORS_ALLOWED_HOSTS", "")!!

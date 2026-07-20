@@ -9,6 +9,7 @@ import com.puregoldbe.ibms.domain.model.ProviderStatus
 import com.puregoldbe.ibms.domain.model.StoreStatus
 import com.puregoldbe.ibms.domain.model.TopSheetStatus
 import com.puregoldbe.ibms.domain.model.UserRole
+import com.puregoldbe.ibms.domain.model.UserStatus
 import com.puregoldbe.ibms.domain.port.IdempotencyContext
 import io.ktor.http.*
 import io.ktor.server.application.*
@@ -48,6 +49,7 @@ private inline fun <reified T : Enum<T>> parseEnum(raw: String?): T? =
     }
 
 internal fun parseUserRole(raw: String?): UserRole? = parseEnum<UserRole>(raw)
+internal fun parseUserStatus(raw: String?): UserStatus? = parseEnum<UserStatus>(raw)
 internal fun parseProviderStatus(raw: String?): ProviderStatus? = parseEnum<ProviderStatus>(raw)
 internal fun parseStoreStatus(raw: String?): StoreStatus? = parseEnum<StoreStatus>(raw)
 internal fun parseAccountStatus(raw: String?): AccountStatus? = parseEnum<AccountStatus>(raw)

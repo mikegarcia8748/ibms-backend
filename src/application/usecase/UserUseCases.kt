@@ -6,6 +6,7 @@ import com.puregoldbe.ibms.domain.model.ProvisionUserRequest
 import com.puregoldbe.ibms.domain.model.ProvisionedUser
 import com.puregoldbe.ibms.domain.model.UserProfile
 import com.puregoldbe.ibms.domain.model.UserRole
+import com.puregoldbe.ibms.domain.model.UserStatus
 import com.puregoldbe.ibms.domain.port.Clock
 import com.puregoldbe.ibms.domain.port.PasswordHasher
 import com.puregoldbe.ibms.domain.port.SecretGenerator
@@ -19,8 +20,13 @@ class ListUsersUseCase(
     private val users: UserRepository,
     private val tx: TransactionRunner,
 ) {
-    suspend operator fun invoke(role: UserRole?, cursor: String?, limit: Int): CursorPage<UserProfile> =
-        tx.inTransaction { users.page(role, cursor, limit) }
+    suspend operator fun invoke(
+        role: UserRole?,
+        status: UserStatus?,
+        cursor: String?,
+        limit: Int,
+    ): CursorPage<UserProfile> =
+        tx.inTransaction { users.page(role, status, cursor, limit) }
 }
 
 /**
@@ -41,25 +47,18 @@ class ProvisionUserUseCase(
 ) {
     suspend operator fun invoke(request: ProvisionUserRequest): ProvisionedUser = tx.inTransaction {
         val username = UsernamePolicy.normalize(request.username)
-        val email = request.email.trim().lowercase()
-        if (email.isBlank() || !email.contains('@')) {
-            throw DomainError.Validation("a valid email address is required", code = "invalid_email")
-        }
         if (request.name.isBlank()) {
             throw DomainError.Validation("name is required", code = "invalid_name")
         }
         if (users.existsByUsername(username)) {
             throw DomainError.Conflict("username '$username' is already taken", code = "username_taken")
         }
-        if (users.existsByEmail(email)) {
-            throw DomainError.Conflict("email '$email' already belongs to another account", code = "email_taken")
-        }
 
         val now = clock.now()
         val temporaryPassword = secrets.temporaryPassword()
         val expiresAt = now + policy.temporaryPasswordTtl
         val user = users.create(
-            input = request.copy(username = username, email = email),
+            input = request.copy(username = username),
             passwordHash = hasher.hash(temporaryPassword),
             tempPasswordExpiresAt = expiresAt,
             at = now,
@@ -115,5 +114,20 @@ class UpdateUserRoleUseCase(
             throw DomainError.Conflict("cannot demote the last sysadmin", "last_sysadmin")
         }
         users.updateRole(userId, newRole) ?: throw DomainError.NotFound("user $userId not found")
+    }
+}
+
+/**
+ * Toggle user status between active and inactive (sysadmin only, enforced at the
+ * controller). Used to disable accounts when an employee resigns without deleting
+ * the user record. An inactive user is blocked from logging in.
+ */
+class UpdateUserStatusUseCase(
+    private val users: UserRepository,
+    private val tx: TransactionRunner,
+) {
+    suspend operator fun invoke(userId: String, newStatus: UserStatus): UserProfile = tx.inTransaction {
+        users.findById(userId) ?: throw DomainError.NotFound("user $userId not found")
+        users.updateStatus(userId, newStatus) ?: throw DomainError.NotFound("user $userId not found")
     }
 }

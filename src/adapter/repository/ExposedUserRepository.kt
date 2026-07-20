@@ -12,6 +12,7 @@ import com.puregoldbe.ibms.domain.model.ProvisionUserRequest
 import com.puregoldbe.ibms.domain.model.UserCredentials
 import com.puregoldbe.ibms.domain.model.UserProfile
 import com.puregoldbe.ibms.domain.model.UserRole
+import com.puregoldbe.ibms.domain.model.UserStatus
 import com.puregoldbe.ibms.domain.port.UserRepository
 import kotlinx.datetime.Instant
 import org.jetbrains.exposed.v1.core.*
@@ -24,22 +25,21 @@ class ExposedUserRepository : UserRepository {
         return Users.selectAll().where { Users.id eq uuid }.map { it.toUserProfile() }.singleOrNull()
     }
 
-    override fun findByEmail(email: String): UserProfile? =
-        Users.selectAll().where { Users.email eq email }.map { it.toUserProfile() }.singleOrNull()
-
     override fun findByUsername(username: String): UserProfile? =
         Users.selectAll().where { Users.username eq username }.map { it.toUserProfile() }.singleOrNull()
 
-    override fun list(role: UserRole?): List<UserProfile> =
+    override fun list(role: UserRole?, status: UserStatus?): List<UserProfile> =
         Users.selectAll()
             .apply { if (role != null) andWhere { Users.role eq role } }
+            .apply { if (status != null) andWhere { Users.status eq status } }
             .orderBy(Users.name)
             .map { it.toUserProfile() }
 
-    override fun page(role: UserRole?, cursor: String?, limit: Int): CursorPage<UserProfile> {
+    override fun page(role: UserRole?, status: UserStatus?, cursor: String?, limit: Int): CursorPage<UserProfile> {
         val anchor = Users.keysetAnchor(Users.createdAt, cursor)
         return Users.selectAll()
             .apply { if (role != null) andWhere { Users.role eq role } }
+            .apply { if (status != null) andWhere { Users.status eq status } }
             .apply { if (anchor != null) andWhere { keysetAfter(Users, Users.createdAt, anchor) } }
             .orderBy(Users.createdAt to SortOrder.ASC, Users.id to SortOrder.ASC)
             .limit(limit + 1)
@@ -50,13 +50,10 @@ class ExposedUserRepository : UserRepository {
     override fun countByRole(role: UserRole): Int =
         Users.selectAll().where { Users.role eq role }.count().toInt()
 
-    // The columns are CITEXT, so these comparisons are case-insensitive in the
+    // The username column is CITEXT, so comparisons are case-insensitive in the
     // database — 'A.Cruz' and 'a.cruz' collide, which is what the unique index means.
     override fun existsByUsername(username: String): Boolean =
         Users.selectAll().where { Users.username eq username }.limit(1).any()
-
-    override fun existsByEmail(email: String): Boolean =
-        Users.selectAll().where { Users.email eq email }.limit(1).any()
 
     override fun create(
         input: ProvisionUserRequest,
@@ -66,13 +63,14 @@ class ExposedUserRepository : UserRepository {
     ): UserProfile {
         val newId = Users.insertAndGetId {
             it[Users.username] = input.username
-            it[Users.email] = input.email
+            it[Users.email] = null
             it[Users.name] = input.name
             it[Users.firstName] = input.firstName
             it[Users.middleInitial] = input.middleInitial
             it[Users.lastName] = input.lastName
             it[Users.employeeNumber] = input.employeeNumber
             it[Users.role] = input.role
+            it[Users.status] = input.status
             it[Users.passwordHash] = passwordHash
             it[Users.mustChangePassword] = true
             it[Users.tempPasswordExpiresAt] = tempPasswordExpiresAt.jt()
@@ -87,6 +85,15 @@ class ExposedUserRepository : UserRepository {
     override fun updateRole(id: String, role: UserRole): UserProfile? {
         val uuid = id.toUuidOrNull() ?: return null
         val updated = Users.update({ Users.id eq uuid }) { it[Users.role] = role }
+        return if (updated == 0) null else findById(id)
+    }
+
+    override fun updateStatus(id: String, status: UserStatus): UserProfile? {
+        val uuid = id.toUuidOrNull() ?: return null
+        val updated = Users.update({ Users.id eq uuid }) {
+            it[Users.status] = status
+            it[Users.updatedAt] = java.time.Instant.now()
+        }
         return if (updated == 0) null else findById(id)
     }
 
@@ -139,13 +146,13 @@ class ExposedUserRepository : UserRepository {
     private fun ResultRow.toUserProfile() = UserProfile(
         id = this[Users.id].value.toString(),
         username = this[Users.username],
-        email = this[Users.email],
         name = this[Users.name],
         firstName = this[Users.firstName],
         middleInitial = this[Users.middleInitial],
         lastName = this[Users.lastName],
         employeeNumber = this[Users.employeeNumber],
         role = this[Users.role],
+        status = this[Users.status],
         mustChangePassword = this[Users.mustChangePassword],
     )
 

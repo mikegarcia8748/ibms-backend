@@ -7,6 +7,7 @@ import com.puregoldbe.ibms.domain.model.PasswordChangeChallenge
 import com.puregoldbe.ibms.domain.model.SessionTokens
 import com.puregoldbe.ibms.domain.model.UserCredentials
 import com.puregoldbe.ibms.domain.model.UserProfile
+import com.puregoldbe.ibms.domain.model.UserStatus
 import com.puregoldbe.ibms.domain.port.AuthTokenIssuer
 import com.puregoldbe.ibms.domain.port.Clock
 import com.puregoldbe.ibms.domain.port.PasswordHasher
@@ -122,6 +123,14 @@ class LoginUseCase(
             users.clearLoginFailures(credentials.userId)
             val user = users.findById(credentials.userId)
                 ?: throw DomainError.Unauthorized("account is unavailable", code = "account_unavailable")
+
+            // Block inactive accounts (e.g. resigned employees) from logging in.
+            if (user.status == UserStatus.INACTIVE) {
+                throw DomainError.Forbidden(
+                    "this account has been deactivated — contact a sysadmin",
+                    code = "account_inactive",
+                )
+            }
 
             if (credentials.mustChangePassword) {
                 LoginResponse(

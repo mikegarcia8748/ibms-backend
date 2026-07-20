@@ -34,7 +34,14 @@ enum class UserRole {
     @SerialName("secretary") SECRETARY,
     @SerialName("payables")  PAYABLES,
     @SerialName("finance")   FINANCE,
+    @SerialName("manager")   MANAGER,
     @SerialName("pending")   PENDING,
+}
+
+@Serializable
+enum class UserStatus {
+    @SerialName("active")   ACTIVE,
+    @SerialName("inactive") INACTIVE,
 }
 
 @Serializable
@@ -100,13 +107,13 @@ enum class AttachmentPurpose {
 data class UserProfile(
     val id: String,
     val username: String,
-    val email: String,
     val name: String,
     val firstName: String? = null,
     val middleInitial: String? = null,
     val lastName: String? = null,
     val employeeNumber: String? = null,
     val role: UserRole,
+    val status: UserStatus = UserStatus.ACTIVE,
     val mustChangePassword: Boolean,
 )
 
@@ -290,13 +297,13 @@ data class RefreshRequest(val refreshToken: String)
 @Serializable
 data class ProvisionUserRequest(
     val username: String,
-    val email: String,
     val name: String,
     val firstName: String? = null,
     val middleInitial: String? = null,
     val lastName: String? = null,
     val employeeNumber: String? = null,
     val role: UserRole = UserRole.PENDING,
+    val status: UserStatus = UserStatus.ACTIVE,
 )
 
 /**
@@ -313,6 +320,9 @@ data class ProvisionedUser(
 
 @Serializable
 data class UpdateRoleRequest(val role: UserRole)
+
+@Serializable
+data class UpdateUserStatusRequest(val status: UserStatus)
 
 @Serializable
 data class StoreUpsertRequest(
