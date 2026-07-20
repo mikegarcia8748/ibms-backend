@@ -2,6 +2,7 @@
 build
 storage
 .gradle
+.kotlin
 .idea
 *.log
 .env

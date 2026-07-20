@@ -1,15 +1,21 @@
 # syntax=docker/dockerfile:1
 
-# ---- Build stage: package the executable fat jar via the Amper (kotlin) wrapper ----
+# ---- Build stage: package the executable fat jar via the Gradle wrapper ----
 FROM eclipse-temurin:21-jdk AS build
 WORKDIR /app
-COPY . .
-RUN chmod +x kotlin && ./kotlin package
+# Warm the Gradle dependency cache on its own layer so source edits don't re-download.
+COPY gradlew ./
+COPY gradle gradle
+RUN chmod +x gradlew && ./gradlew --version
+COPY settings.gradle.kts build.gradle.kts ./
+COPY src src
+COPY resources resources
+RUN ./gradlew buildFatJar --no-daemon
 
 # ---- Run stage: slim JRE with just the jar ----
 FROM eclipse-temurin:21-jre
 WORKDIR /app
-COPY --from=build /app/build/tasks/_ibms-backend_executableJarJvm/ibms-backend-jvm-executable.jar app.jar
+COPY --from=build /app/build/libs/ibms-backend-all.jar app.jar
 EXPOSE 8080
 # All configuration comes from environment variables — see .env.example
 # (DB_URL, DB_USER, DB_PASSWORD, JWT_SECRET, GOOGLE_OAUTH_CLIENT_ID, STORAGE_LOCAL_DIR, ...).

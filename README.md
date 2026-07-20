@@ -5,7 +5,7 @@ replacing the former React-app-writes-directly-to-Firestore model. PostgreSQL is
 single source of truth; all CRUD, billing math, invoice sequencing, the 30-day grace
 logic, and Excel export run server-side behind a role-guarded API.
 
-Built with **Amper** (the `./kotlin` wrapper), Kotlin 2.4, Ktor 3.1, Exposed (JDBC),
+Built with **Gradle** (Kotlin DSL, `./gradlew`), Kotlin 2.3, Ktor 3.4, Exposed (JDBC),
 Flyway, HikariCP. Tests use Kotest + MockK + Testcontainers.
 
 ## Architecture (Clean Architecture)
@@ -26,12 +26,12 @@ unit-testable with in-memory fakes. Ports live in `domain/port`; adapters implem
 
 ## Prerequisites
 - Docker (for local Postgres and Testcontainers)
-- The `./kotlin` wrapper downloads its own toolchain/JDK on first run — no local JDK needed.
+- JDK 21 (the Gradle toolchain resolves/provisions it; `./gradlew` downloads Gradle itself on first run).
 
 ## Run locally
 ```bash
 docker compose up -d --wait                 # local Postgres 16 on :5432
-DEV_AUTH_ENABLED=true ./kotlin run          # Flyway migrates, serves on :8080
+DEV_AUTH_ENABLED=true ./gradlew run         # Flyway migrates, serves on :8080
 ```
 Then obtain a dev JWT (no Google needed) and call the API:
 ```bash
@@ -40,16 +40,16 @@ TOKEN=$(curl -s -X POST localhost:8080/auth/dev-login \
   | python3 -c 'import sys,json;print(json.load(sys.stdin)["data"]["token"])')
 curl localhost:8080/stores -H "Authorization: Bearer $TOKEN"
 ```
-Run on a different port: `./kotlin run -- -port=8081`.
+Run on a different port: `./gradlew run --args="-port=8081"`.
 
 ## Test
 ```bash
-./kotlin test        # Kotest specs: domain + use-case units + Testcontainers integration
+./gradlew test       # Kotest specs: domain + use-case units + Testcontainers integration
 ```
 
 ## Package / Docker
 ```bash
-./kotlin package     # -> build/tasks/_ibms-backend_executableJarJvm/ibms-backend-jvm-executable.jar
+./gradlew buildFatJar   # -> build/libs/ibms-backend-all.jar
 docker build -t ibms-backend .
 ```
 The image runs the executable fat jar; all config is via environment variables.
