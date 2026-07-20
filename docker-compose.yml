@@ -16,5 +16,36 @@ services:
       timeout: 5s
       retries: 10
 
+  app:
+    build: .
+    container_name: ibms-backend
+    # Flyway migrates at startup, so the app must not boot before Postgres is
+    # accepting connections — hence the healthcheck condition rather than a bare
+    # depends_on, which only waits for the container to start.
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    environment:
+      # `db` is the service's DNS name on the compose network. Not localhost:
+      # inside this container that resolves to the app itself.
+      DB_URL: jdbc:postgresql://db:5432/ibms
+      DB_USER: ibms
+      DB_PASSWORD: ibms
+      JWT_SECRET: ${JWT_SECRET:-local-docker-testing-secret-not-for-any-shared-host}
+      # Named volume below, so uploads survive a rebuild.
+      STORAGE_LOCAL_DIR: /app/storage
+      CORS_ALLOWED_HOSTS: ${CORS_ALLOWED_HOSTS:-}
+      APP_URL: ${APP_URL:-http://localhost:8080}
+      # Only consulted on the first boot against an empty database; a no-op once
+      # the sysadmin has a password. NOTE: leaving this blank does *not* generate
+      # a random password today — AppConfig defaults it to a literal. See the
+      # comment on BOOTSTRAP_ADMIN_PASSWORD in .env.example.
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
+    volumes:
+      - ibms-storage:/app/storage
+
 volumes:
   ibms-pgdata:
+  ibms-storage:
