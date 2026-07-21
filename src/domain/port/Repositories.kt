@@ -76,6 +76,7 @@ interface SessionRepository {
 
 interface ProviderRepository {
     fun findById(id: String): Provider?
+    fun findByName(name: String): Provider?
     fun list(status: ProviderStatus?): List<Provider>
     fun page(status: ProviderStatus?, cursor: String?, limit: Int): CursorPage<Provider>
     fun create(name: String, paymentScheduleDay: Int): Provider
@@ -109,6 +110,7 @@ interface AttachmentRepository {
 
 interface StoreRepository {
     fun findById(id: String): Store?
+    fun findByBranchCode(branchCode: String): Store?
     fun list(status: StoreStatus?, query: String?): List<Store>
     fun page(status: StoreStatus?, query: String?, cursor: String?, limit: Int): CursorPage<Store>
     fun existsByBranchCode(branchCode: String): Boolean
