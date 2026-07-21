@@ -512,3 +512,59 @@ data class ErrorEnvelope(
 /** One page of a cursor-paginated list; `nextCursor` is null on the last page. */
 @Serializable
 data class CursorPage<T>(val items: List<T>, val nextCursor: String?)
+
+// =====================================================================
+//  Account change requests (secretary submits, manager approves)
+// =====================================================================
+@Serializable
+enum class AccountChangeRequestStatus {
+    @SerialName("pending")   PENDING,
+    @SerialName("approved")  APPROVED,
+    @SerialName("rejected")  REJECTED,
+    @SerialName("cancelled") CANCELLED,
+}
+
+@Serializable
+data class AccountChangeRequest(
+    val id: String,
+    val accountId: String,
+    val submittedById: String,
+    val status: AccountChangeRequestStatus,
+    val accountNumberNew: String? = null,
+    val installationDateNew: LocalDate? = null,
+    val rateNew: Money? = null,
+    val providerIdNew: String? = null,
+    val circuitIdNew: String? = null,
+    val planNameNew: String? = null,
+    val proofAttachmentId: String? = null,
+    val approvedById: String? = null,
+    val approvedAt: Instant? = null,
+    val rejectedReason: String? = null,
+    val cancelledAt: Instant? = null,
+    val createdAt: Instant,
+    val updatedAt: Instant? = null,
+)
+
+@Serializable
+data class SubmitAccountChangeRequestInput(
+    val accountNumber: String? = null,
+    val installationDate: LocalDate? = null,
+    val rate: Money? = null,
+    val providerId: String? = null,
+    val circuitId: String? = null,
+    val planName: String? = null,
+    val proofAttachmentId: String? = null,
+)
+
+@Serializable
+data class FieldDiff(
+    val field: String,
+    val currentValue: String?,
+    val proposedValue: String?,
+)
+
+@Serializable
+data class AccountChangeRequestWithDiff(
+    val request: AccountChangeRequest,
+    val diff: List<FieldDiff>,
+)
