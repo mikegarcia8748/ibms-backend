@@ -13,8 +13,7 @@ data class UpdateProviderRequest(val name: String? = null, val paymentScheduleDa
 /** Summary of a bulk-import run: counts of entities created vs reused, plus skip reasons. */
 @Serializable
 data class BulkImportSummary(
-    val providerName: String,
-    val providerCreated: Boolean,
+    val providers: List<ProviderImportSummary>,
     val storesCreated: Int,
     val storesReused: Int,
     val accountsCreated: Int,
@@ -22,4 +21,12 @@ data class BulkImportSummary(
     val rowsSkipped: Int,
     val skipReasons: List<String>,
     val totalRows: Int,
+)
+
+@Serializable
+data class ProviderImportSummary(
+    val name: String,
+    val created: Boolean,
+    val accountsCreated: Int,
+    val accountsReused: Int,
 )

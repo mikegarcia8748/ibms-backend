@@ -1,9 +1,11 @@
 package com.puregoldbe.ibms.application.usecase
 
 import com.puregoldbe.ibms.adapter.controller.BulkImportSummary
+import com.puregoldbe.ibms.adapter.controller.ProviderImportSummary
 import com.puregoldbe.ibms.domain.error.DomainError
 import com.puregoldbe.ibms.domain.model.AccountUpsertRequest
 import com.puregoldbe.ibms.domain.model.AttachmentPurpose
+import com.puregoldbe.ibms.domain.model.Provider
 import com.puregoldbe.ibms.domain.model.StoreType
 import com.puregoldbe.ibms.domain.model.StoreUpsertRequest
 import com.puregoldbe.ibms.domain.port.AccountRepository
@@ -30,12 +32,14 @@ import java.util.Locale
  * The spreadsheet must have a header row with column names: Store Code, Store
  * Name, ISP/Provider, Service Type, Account No, Circuit ID, Start Date,
  * Monthly Recurring Amount. Column order does not matter — headers are matched
- * by name.
+ * by name (case-insensitive).
  *
  * The import is idempotent: re-running with the same file creates no duplicates.
- * The provider is matched by name, stores by branchCode, accounts by
- * (providerId, accountNumber). Rows missing required fields or with a zero MRC
- * are skipped and reported in the summary.
+ * Providers are read from the ISP/Provider column and matched by name — a single
+ * file may contain rows for multiple providers (e.g. PLDT, Globe, Radius, Converge).
+ * Stores are matched by branchCode, accounts by (providerId, accountNumber). Rows
+ * missing required fields (including ISP/Provider) or with a zero MRC are skipped
+ * and reported in the summary.
  *
  * A single shared placeholder attachment (purpose = installation_proof) is
  * created to satisfy the NOT NULL FK on stores.proof_of_installation_id,
@@ -51,7 +55,6 @@ class BulkImportAccountsUseCase(
     private val tx: TransactionRunner,
 ) {
     companion object {
-        private const val PROVIDER_NAME = "Globe"
         private const val DEFAULT_PAYMENT_SCHEDULE_DAY = 5
         private val DATE_FORMATS = listOf(
             DateTimeFormatter.ofPattern("M/d/yyyy", Locale.US),
@@ -61,18 +64,13 @@ class BulkImportAccountsUseCase(
         )
     }
 
-    suspend operator fun invoke(fileBytes: ByteArray, actorId: String): BulkImportSummary = tx.inTransaction {
-        // 1. Find or create the provider
-        val existingProvider = providers.findByName(PROVIDER_NAME)
-        val provider = if (existingProvider != null) {
-            existingProvider
-        } else {
-            val created = providers.create(PROVIDER_NAME, DEFAULT_PAYMENT_SCHEDULE_DAY)
-            sequences.seed(created.id, InvoiceNumberFormatter.prefix(created.name))
-            created
-        }
+    private class ProviderStat(val created: Boolean) {
+        var accountsCreated: Int = 0
+        var accountsReused: Int = 0
+    }
 
-        // 2. Shared placeholder attachment for store installation proofs.
+    suspend operator fun invoke(fileBytes: ByteArray, actorId: String): BulkImportSummary = tx.inTransaction {
+        // 1. Shared placeholder attachment for store installation proofs.
         val proof = attachments.create(
             purpose = AttachmentPurpose.INSTALLATION_PROOF,
             entityType = "store",
@@ -83,37 +81,38 @@ class BulkImportAccountsUseCase(
             uploadedBy = actorId,
         )
 
-        // 3. Open the XLSX workbook
+        // 2. Open the XLSX workbook
         val workbook = try {
             XSSFWorkbook(ByteArrayInputStream(fileBytes))
         } catch (e: Exception) {
             throw DomainError.Validation("file is not a valid XLSX: ${e.message}", "invalid_file")
         }
 
-        try {
+        workbook.use { workbook ->
             val sheet = workbook.getSheetAt(0)
 
-            // 4. Build a header-name -> column-index map from row 0
+            // 3. Build a header-name -> column-index map from row 0 (case-insensitive)
             val headerRow = sheet.getRow(0)
                 ?: throw DomainError.Validation("spreadsheet has no header row", "invalid_file")
             val headerMap = mutableMapOf<String, Int>()
             for (col in 0 until headerRow.lastCellNum) {
-                val name = cellString(headerRow.getCell(col))?.trim()
+                val name = cellString(headerRow.getCell(col))?.trim()?.lowercase()
                 if (name != null) headerMap[name] = col
             }
 
-            fun colOf(name: String): Int = headerMap[name]
+            fun colOf(name: String): Int = headerMap[name.lowercase()]
                 ?: throw DomainError.Validation("missing required column '$name' in header row", "invalid_file")
 
             val colStoreCode = colOf("Store Code")
             val colStoreName = colOf("Store Name")
+            val colProvider = colOf("ISP/Provider")
             val colAccountNo = colOf("Account No")
             val colMra = colOf("Monthly Recurring Amount")
-            val colServiceType = headerMap["Service Type"]
-            val colCircuitId = headerMap["Circuit ID"]
-            val colStartDate = headerMap["Start Date"]
+            val colServiceType = headerMap["service type"]
+            val colCircuitId = headerMap["circuit id"]
+            val colStartDate = headerMap["start date"]
 
-            // 5. Process each data row
+            // 4. Process each data row
             var storesCreated = 0
             var storesReused = 0
             var accountsCreated = 0
@@ -123,6 +122,8 @@ class BulkImportAccountsUseCase(
             var totalRows = 0
 
             val storeCache = mutableMapOf<String, String>() // branchCode -> storeId
+            val providerCache = mutableMapOf<String, Provider>() // name -> Provider
+            val providerStats = mutableMapOf<String, ProviderStat>() // name -> stats
 
             for (rowIdx in 1..sheet.lastRowNum) {
                 val row = sheet.getRow(rowIdx) ?: continue
@@ -130,6 +131,7 @@ class BulkImportAccountsUseCase(
 
                 val storeCode = cellString(row.getCell(colStoreCode))
                 val storeName = cellString(row.getCell(colStoreName))
+                val providerName = cellString(row.getCell(colProvider))
                 val accountNo = cellString(row.getCell(colAccountNo))
                 val serviceType = colServiceType?.let { cellString(row.getCell(it)) }
                 val circuitId = colCircuitId?.let { cellString(row.getCell(it)) }
@@ -139,6 +141,11 @@ class BulkImportAccountsUseCase(
                 if (storeCode.isNullOrBlank()) {
                     rowsSkipped++
                     skipReasons.add("Row ${rowIdx + 1}: missing Store Code")
+                    continue
+                }
+                if (providerName.isNullOrBlank()) {
+                    rowsSkipped++
+                    skipReasons.add("Row ${rowIdx + 1}: missing ISP/Provider")
                     continue
                 }
                 if (accountNo.isNullOrBlank()) {
@@ -151,6 +158,20 @@ class BulkImportAccountsUseCase(
                     rowsSkipped++
                     skipReasons.add("Row ${rowIdx + 1}: invalid or zero Monthly Recurring Amount")
                     continue
+                }
+
+                // Find or create provider (cached by name)
+                val provider = providerCache.getOrPut(providerName) {
+                    val existing = providers.findByName(providerName)
+                    if (existing != null) {
+                        providerStats[providerName] = ProviderStat(created = false)
+                        existing
+                    } else {
+                        val created = providers.create(providerName, DEFAULT_PAYMENT_SCHEDULE_DAY)
+                        sequences.seed(created.id, InvoiceNumberFormatter.prefix(created.name))
+                        providerStats[providerName] = ProviderStat(created = true)
+                        created
+                    }
                 }
 
                 // Find or create store (cached by branchCode)
@@ -176,6 +197,7 @@ class BulkImportAccountsUseCase(
                 // Find or create account
                 if (accounts.existsByProviderAndNumber(provider.id, accountNo)) {
                     accountsReused++
+                    providerStats[providerName]!!.accountsReused++
                 } else {
                     val installationDate = parseDate(startDate) ?: LocalDate(1970, 1, 1)
                     val notes = if (startDate.isNullOrBlank()) {
@@ -198,13 +220,24 @@ class BulkImportAccountsUseCase(
                         createdBy = actorId,
                     )
                     accountsCreated++
+                    providerStats[providerName]!!.accountsCreated++
                     activity.record(actorId, "account.bulk_imported", "account", created.id)
                 }
             }
 
+            val providerSummaries = providerStats.entries
+                .sortedBy { it.key }
+                .map { (name, stat) ->
+                    ProviderImportSummary(
+                        name = name,
+                        created = stat.created,
+                        accountsCreated = stat.accountsCreated,
+                        accountsReused = stat.accountsReused,
+                    )
+                }
+
             BulkImportSummary(
-                providerName = provider.name,
-                providerCreated = existingProvider == null,
+                providers = providerSummaries,
                 storesCreated = storesCreated,
                 storesReused = storesReused,
                 accountsCreated = accountsCreated,
@@ -213,8 +246,6 @@ class BulkImportAccountsUseCase(
                 skipReasons = skipReasons,
                 totalRows = totalRows,
             )
-        } finally {
-            workbook.close()
         }
     }
 
