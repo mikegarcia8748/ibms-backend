@@ -3,11 +3,15 @@ package com.puregoldbe.ibms.adapter.controller
 import com.puregoldbe.ibms.adapter.security.authorize
 import com.puregoldbe.ibms.application.usecase.ApproveTopSheetUseCase
 import com.puregoldbe.ibms.application.usecase.CompileTopSheetUseCase
+import com.puregoldbe.ibms.application.usecase.ConfirmTopSheetUseCase
+import com.puregoldbe.ibms.application.usecase.CreateDraftTopSheetUseCase
 import com.puregoldbe.ibms.application.usecase.GetTopSheetDetailsUseCase
 import com.puregoldbe.ibms.application.usecase.GetTopSheetUseCase
 import com.puregoldbe.ibms.application.usecase.ListTopSheetsUseCase
 import com.puregoldbe.ibms.application.usecase.PayTopSheetUseCase
 import com.puregoldbe.ibms.application.usecase.PreviewCompilationUseCase
+import com.puregoldbe.ibms.application.usecase.RemoveDraftLineUseCase
+import com.puregoldbe.ibms.application.usecase.UpdateDraftLineUseCase
 import com.puregoldbe.ibms.domain.model.CompileRequest
 import com.puregoldbe.ibms.domain.model.UserRole
 import io.ktor.server.request.*
@@ -18,6 +22,10 @@ import kotlinx.serialization.json.Json
 fun Route.topSheetRoutes(
     preview: PreviewCompilationUseCase,
     compile: CompileTopSheetUseCase,
+    createDraft: CreateDraftTopSheetUseCase,
+    updateLine: UpdateDraftLineUseCase,
+    removeLine: RemoveDraftLineUseCase,
+    confirmDraft: ConfirmTopSheetUseCase,
     list: ListTopSheetsUseCase,
     get: GetTopSheetUseCase,
     details: GetTopSheetDetailsUseCase,
@@ -48,6 +56,33 @@ fun Route.topSheetRoutes(
             val req = call.receive<CompileRequest>()
             val idem = call.idempotencyContext(caller.userId, Json.encodeToString(req))
             call.created(compile(req.providerId, req.billingPeriod, caller.userId, idem))
+        }
+        post("/draft") {
+            val caller = call.authorize(UserRole.SECRETARY)
+            val req = call.receive<CompileRequest>()
+            val idem = call.idempotencyContext(caller.userId, Json.encodeToString(req))
+            call.created(createDraft(req.providerId, req.billingPeriod, caller.userId, idem))
+        }
+        get("/{id}/lines") {
+            call.authorize()
+            call.ok(details(call.pathId()))
+        }
+        patch("/{id}/lines/{lineId}") {
+            val caller = call.authorize(UserRole.SECRETARY)
+            val req = call.receive<UpdateLineRequest>()
+            val lineId = call.parameters["lineId"]!!
+            call.ok(updateLine(call.pathId(), lineId, req.rfpNumber, req.proratedAmount))
+        }
+        delete("/{id}/lines/{lineId}") {
+            val caller = call.authorize(UserRole.SECRETARY)
+            val lineId = call.parameters["lineId"]!!
+            removeLine(call.pathId(), lineId, caller.userId)
+            call.noContent()
+        }
+        post("/{id}/confirm") {
+            val caller = call.authorize(UserRole.SECRETARY)
+            val idem = call.idempotencyContext(caller.userId, "topsheet.confirm:${call.pathId()}")
+            call.ok(confirmDraft(call.pathId(), caller.userId, idem))
         }
         get("/{id}") {
             call.authorize()

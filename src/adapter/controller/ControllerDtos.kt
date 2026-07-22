@@ -9,3 +9,9 @@ data class CreateProviderRequest(val name: String, val paymentScheduleDay: Int)
 
 @Serializable
 data class UpdateProviderRequest(val name: String? = null, val paymentScheduleDay: Int? = null)
+
+@Serializable
+data class UpdateLineRequest(
+    val rfpNumber: String? = null,
+    val proratedAmount: String? = null,
+)

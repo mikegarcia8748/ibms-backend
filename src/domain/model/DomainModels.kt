@@ -74,6 +74,7 @@ enum class AccountStatus {
 
 @Serializable
 enum class TopSheetStatus {
+    @SerialName("draft")    DRAFT,
     @SerialName("compiled") COMPILED,
     @SerialName("approved") APPROVED,
     @SerialName("paid")     PAID,
@@ -176,7 +177,8 @@ data class Account(
 @Serializable
 data class TopSheet(
     val id: String,
-    val invoiceNumber: String,
+    val invoiceNumber: String? = null,
+    val batchNumber: String? = null,
     val billingPeriod: String,             // "YYYY-MM"
     val providerId: String? = null,
     val providerName: String? = null,
@@ -204,6 +206,8 @@ data class TopSheetDetail(
     val circuitId: String? = null,
     val accountNumber: String? = null,
     val accountStatus: String? = null,
+    val rfpNumber: String? = null,
+    val rfpSortOrder: Int? = null,
 )
 
 @Serializable
@@ -393,6 +397,7 @@ data class CompilableLine(
     val fullAmount: Money,          // MRC
     val proratedAmount: Money,
     val isProrated: Boolean,
+    val storeId: String? = null,
 )
 
 // =====================================================================
