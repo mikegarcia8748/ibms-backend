@@ -143,6 +143,31 @@ class CreateDraftTopSheetUseCaseSpec : BehaviorSpec({
         }
     }
 
+    Given("an eligible account whose store was deleted (orphaned storeId)") {
+        every { providers.findById("p1") } returns provider
+        every { stores.list(null, null) } returns listOf(store118)
+        every { accounts.list(null, "p1", null) } returns listOf(acct("a1", "s1"), acct("a2", "s-missing"))
+        every { topsheets.billedAccountIds("2026-07") } returns emptySet()
+        every { sequences.prefixOf("p1") } returns "CONV-"
+        every { batchSequences.nextValue("p1") } returns 1
+        every { topsheets.createDraft(any(), any(), any(), any(), any(), any(), any()) } returns draftTopsheet
+
+        When("creating a draft") {
+            val captured = mutableListOf<NewTopSheetLine>()
+            every { topsheets.addLine(any(), any()) } answers { captured.add(secondArg<NewTopSheetLine>()) }
+            useCase("p1", "2026-07", "compiler")
+
+            Then("the orphaned account still gets a line, with null branchCode/storeName, sorted after populated codes") {
+                captured.size shouldBe 2
+                captured[0].accountId shouldBe "a1"
+                captured[0].branchCode shouldBe "118"
+                captured[1].accountId shouldBe "a2"
+                captured[1].branchCode shouldBe null
+                captured[1].storeName shouldBe null
+            }
+        }
+    }
+
     Given("an unknown provider") {
         every { providers.findById("nope") } returns null
 

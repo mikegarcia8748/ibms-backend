@@ -278,7 +278,8 @@ class CreateDraftTopSheetUseCase(
                 ?: throw DomainError.NotFound("provider $providerId not found")
             val billed = topsheets.billedAccountIds(billingPeriod)
             val storesById = stores.list(null, null).associateBy { it.id }
-            val lines = computeEligible(providerId, billingPeriod, accounts.list(null, providerId, null), storesById, billed)
+            val lines =
+                computeEligible(providerId, billingPeriod, accounts.list(null, providerId, null), storesById, billed)
             if (lines.isEmpty()) {
                 throw DomainError.Conflict(
                     "no eligible accounts to compile for provider $providerId / $billingPeriod",
@@ -299,18 +300,20 @@ class CreateDraftTopSheetUseCase(
                 compilerId = compilerId,
             )
             sortedLines.forEachIndexed { index, e ->
-                topsheets.addLine(topsheet.id, NewTopSheetLine(
-                    accountId = e.account.id,
-                    billingPeriod = billingPeriod,
-                    proratedAmount = e.proratedAmount,
-                    fullAmount = e.account.rate,
-                    branchCode = e.store?.branchCode,
-                    storeName = e.store?.name,
-                    circuitId = e.account.circuitId,
-                    accountNumber = e.account.accountNumber,
-                    accountStatus = e.account.status.name.lowercase(),
-                    rfpSortOrder = index + 1,
-                ))
+                topsheets.addLine(
+                    topsheet.id, NewTopSheetLine(
+                        accountId = e.account.id,
+                        billingPeriod = billingPeriod,
+                        proratedAmount = e.proratedAmount,
+                        fullAmount = e.account.rate,
+                        branchCode = e.store?.branchCode,
+                        storeName = e.store?.name,
+                        circuitId = e.account.circuitId,
+                        accountNumber = e.account.accountNumber,
+                        accountStatus = e.account.status.name.lowercase(),
+                        rfpSortOrder = index + 1,
+                    )
+                )
             }
             activity.record(compilerId, "topsheet.draft_created", "topsheet", topsheet.id)
             topsheet
@@ -341,12 +344,20 @@ class UpdateDraftLineUseCase(
             throw DomainError.Validation("rfpNumber must be numeric only")
         }
         if (proratedAmount != null) {
-            try {
+            if (proratedAmount.isBlank()) {
+                throw DomainError.Validation("proratedAmount must be a valid decimal amount")
+            }
+            val parsed = try {
                 proratedAmount.toMoney()
             } catch (e: NumberFormatException) {
                 throw DomainError.Validation("proratedAmount must be a valid decimal amount")
             }
+            if (parsed <= BigDecimal.ZERO) {
+                throw DomainError.Validation("proratedAmount must be greater than zero")
+            }
         }
+        topsheets.findLines(topsheetId).find { it.id == lineId }
+            ?: throw DomainError.NotFound("line $lineId not found")
         topsheets.updateLine(lineId, rfpNumber, proratedAmount)
             ?: throw DomainError.NotFound("line $lineId not found")
     }
@@ -410,18 +421,23 @@ class ConfirmTopSheetUseCase(
                 throw DomainError.Conflict("only draft topsheets can be confirmed (was ${ts.status.name.lowercase()})")
             }
             val lines = topsheets.findLines(topsheetId)
+            if (lines.isEmpty()) {
+                throw DomainError.Conflict("draft topsheet $topsheetId has no lines to confirm", "nothing_to_compile")
+            }
             val missingRfp = lines.filter { it.rfpNumber == null }
             if (missingRfp.isNotEmpty()) {
                 throw DomainError.Validation("All lines must have an RFP number before confirming")
             }
+            val providerId = ts.providerId
+                ?: throw DomainError.Conflict("topsheet $topsheetId has no provider assigned", "missing_provider")
             // Re-validate eligibility (accounts may have changed since draft creation)
             val billedIds = topsheets.billedAccountIds(ts.billingPeriod)
-            val accountsById = accounts.list(null, ts.providerId, null).associateBy { it.id }
+            val accountsById = accounts.list(null, providerId, null).associateBy { it.id }
             val ineligible = mutableListOf<String>()
             val doubleBilled = mutableListOf<String>()
             for (line in lines) {
                 val account = accountsById[line.accountId]
-                if (account == null || !ProrationEngine.isEligible(account, ts.providerId!!, ts.billingPeriod, emptySet())) {
+                if (account == null || !ProrationEngine.isEligible(account, providerId, ts.billingPeriod, emptySet())) {
                     ineligible.add(line.accountId)
                 } else if (billedIds.contains(line.accountId)) {
                     doubleBilled.add(line.accountId)
@@ -437,7 +453,6 @@ class ConfirmTopSheetUseCase(
             val totalAmount = lines.fold(BigDecimal.ZERO) { acc, l -> acc + l.proratedAmount.toMoney() }.toMoneyString()
             val accountCount = lines.size
             // Mint invoice number
-            val providerId = ts.providerId!!
             val sequence = sequences.nextValue(providerId)
             val prefix = sequences.prefixOf(providerId) ?: InvoiceNumberFormatter.prefix(ts.providerName ?: "")
             val invoiceNumber = InvoiceNumberFormatter.format(prefix, ts.billingPeriod, sequence)

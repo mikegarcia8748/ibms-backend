@@ -124,4 +124,26 @@ class CompileTopSheetUseCaseSpec : BehaviorSpec({
             }
         }
     }
+
+    Given("a billing period far in the future") {
+        val futureCompiled = TopSheet(
+            id = "ts2", invoiceNumber = "CONV-209901-0001", billingPeriod = "2099-01",
+            providerId = "p1", providerName = "Converge", accountCount = 1, totalAmount = "1000.00",
+            status = TopSheetStatus.COMPILED, compilerId = "compiler", compilationDate = Instant.fromEpochSeconds(0),
+        )
+        every { providers.findById("p1") } returns provider
+        every { stores.list(null, null) } returns listOf(store)
+        every { accounts.list(null, "p1", null) } returns listOf(acct("a1"))
+        every { topsheets.billedAccountIds("2099-01") } returns emptySet()
+        every { sequences.nextValue("p1") } returns 1
+        every { sequences.prefixOf("p1") } returns "CONV-"
+        every { topsheets.create(any(), any(), any(), any(), any(), any(), any()) } returns futureCompiled
+
+        When("compiling directly via the deprecated legacy path") {
+            Then("it succeeds -- this path has no future-period guard, unlike CreateDraftTopSheetUseCase (misalignment, not fixed here)") {
+                val result = useCase("p1", "2099-01", "compiler")
+                result.billingPeriod shouldBe "2099-01"
+            }
+        }
+    }
 })

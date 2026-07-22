@@ -11,6 +11,7 @@ import com.puregoldbe.ibms.domain.model.StoreUpsertRequest
 import com.puregoldbe.ibms.domain.port.AccountRepository
 import com.puregoldbe.ibms.domain.port.ActivityRecorder
 import com.puregoldbe.ibms.domain.port.AttachmentRepository
+import com.puregoldbe.ibms.domain.port.BatchSequenceRepository
 import com.puregoldbe.ibms.domain.port.InvoiceSequenceRepository
 import com.puregoldbe.ibms.domain.port.ProviderRepository
 import com.puregoldbe.ibms.domain.port.StoreRepository
@@ -48,6 +49,7 @@ import java.util.Locale
 class BulkImportAccountsUseCase(
     private val providers: ProviderRepository,
     private val sequences: InvoiceSequenceRepository,
+    private val batchSequences: BatchSequenceRepository,
     private val stores: StoreRepository,
     private val accounts: AccountRepository,
     private val attachments: AttachmentRepository,
@@ -169,6 +171,7 @@ class BulkImportAccountsUseCase(
                     } else {
                         val created = providers.create(providerName, DEFAULT_PAYMENT_SCHEDULE_DAY)
                         sequences.seed(created.id, InvoiceNumberFormatter.prefix(created.name))
+                        batchSequences.seed(created.id)
                         providerStats[providerName] = ProviderStat(created = true)
                         created
                     }

@@ -112,7 +112,7 @@ fun Application.moduleWith(cfg: AppConfig) {
     val transferAccount = TransferAccountUseCase(accounts, stores, transfers, attachments, idempotency, activities, clock, tx)
     val listTransfers = ListTransfersUseCase(transfers, tx)
     val deactivateAccount = DeactivateAccountUseCase(accounts, attachments, activities, clock, tx)
-    val bulkImport = BulkImportAccountsUseCase(providers, sequences, stores, accounts, attachments, activities, tx)
+    val bulkImport = BulkImportAccountsUseCase(providers, sequences, batchSequences, stores, accounts, attachments, activities, tx)
     val presignUpload = PresignUploadUseCase(attachments, presign, tx)
     val presignDownload = PresignDownloadUseCase(attachments, presign, tx)
     val storeBlob = StoreBlobUseCase(attachments, storage, presign, tx)
