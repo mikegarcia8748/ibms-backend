@@ -117,7 +117,7 @@ fun Application.moduleWith(cfg: AppConfig) {
     val presignDownload = PresignDownloadUseCase(attachments, presign, tx)
     val storeBlob = StoreBlobUseCase(attachments, storage, presign, tx)
     val readBlob = ReadBlobUseCase(attachments, storage, presign, tx)
-    val previewCompilation = PreviewCompilationUseCase(accounts, stores, topsheets, tx)
+    val previewCompilation = PreviewCompilationUseCase(accounts, stores, topsheets, clock, tx)
     val compileTopSheet = CompileTopSheetUseCase(accounts, stores, providers, topsheets, sequences, idempotency, activities, tx)
     val listTopSheets = ListTopSheetsUseCase(topsheets, tx)
     val getTopSheet = GetTopSheetUseCase(topsheets, tx)

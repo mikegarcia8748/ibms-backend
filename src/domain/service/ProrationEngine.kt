@@ -47,13 +47,11 @@ object ProrationEngine {
         var startDay = 1
         var endDay = daysInMonth
 
-        val install = parseFlexibleDate(account.installationDate.toString())
-        if (install != null) {
-            val installPeriod = periodOf(install)
-            when {
-                installPeriod == billingPeriod -> startDay = install.dayOfMonth
-                installPeriod > billingPeriod  -> return "0.00"   // not installed yet
-            }
+        val start = subscriptionStart(account)
+        val startPeriod = periodOf(start)
+        when {
+            startPeriod == billingPeriod -> startDay = start.dayOfMonth
+            startPeriod > billingPeriod  -> return "0.00"   // not subscribed yet
         }
 
         val termAt = account.terminationRequestedAt
@@ -87,9 +85,7 @@ object ProrationEngine {
         if (account.status == AccountStatus.TRANSFERRED) return false
         if (account.providerId != providerId) return false
 
-        val install = parseFlexibleDate(account.installationDate.toString())
-        val installPeriod = install?.let { periodOf(it) } ?: currentPeriod()
-        if (installPeriod > billingPeriod) return false            // not installed yet
+        if (periodOf(subscriptionStart(account)) > billingPeriod) return false   // not subscribed yet
 
         val termAt = account.terminationRequestedAt
         if (termAt != null) {
@@ -102,11 +98,71 @@ object ProrationEngine {
         return account.id !in alreadyBilledAccountIds
     }
 
-    /** True if the account's install month equals the billing period (prorated first bill). */
-    fun isFirstBillProrated(account: Account, billingPeriod: String): Boolean {
-        val install = parseFlexibleDate(account.installationDate.toString()) ?: return false
-        return periodOf(install) == billingPeriod
+    /** True if the account's subscription month equals the billing period (prorated first bill). */
+    fun isFirstBillProrated(account: Account, billingPeriod: String): Boolean =
+        periodOf(subscriptionStart(account)) == billingPeriod
+
+    /**
+     * The date an account's subscription begins for billing purposes:
+     * [Account.contractStartDate] when set, otherwise [Account.installationDate].
+     */
+    fun subscriptionStart(account: Account): LocalDate =
+        account.contractStartDate ?: account.installationDate
+
+    // ----------------------------------------------------------------
+    //  Review buckets: NOT_YET_SUBSCRIBED / ARREARS / BILL_NOW
+    // ----------------------------------------------------------------
+
+    /**
+     * True when the selected [billingPeriod] is *before* the account's subscription
+     * month — i.e. the reviewer picked a period where the account didn't exist yet.
+     * Surfaced as an explicit validation/warning rather than silently excluded.
+     */
+    fun isNotYetSubscribed(account: Account, billingPeriod: String): Boolean =
+        periodOf(subscriptionStart(account)) > billingPeriod
+
+    /**
+     * The earliest period arrears may reach back to: the account's entry into *this*
+     * system ([Account.createdAt]). This is the migrated-data guard — an account
+     * imported with an old subscription date but no in-system billing history must not
+     * be retro-billed for periods that predate its arrival here (they were billed in
+     * whatever system it was migrated from).
+     */
+    fun billingStartPeriod(account: Account): String =
+        periodOf(account.createdAt.toLocalDateTime(TimeZone.UTC).date)
+
+    /**
+     * Prior periods (strictly before [billingPeriod]) that carry a non-zero charge and
+     * have never been billed or settled — the arrears window. Bounded below by the later
+     * of the subscription month and the [billingStartPeriod] watermark.
+     * [settledPeriods] is the union of periods already billed for the account and
+     * periods already recovered as arrears (the double-recovery guard set).
+     */
+    fun missedPeriods(
+        account: Account,
+        billingPeriod: String,
+        settledPeriods: Set<String>,
+    ): List<String> {
+        val startPeriod = maxOf(periodOf(subscriptionStart(account)), billingStartPeriod(account))
+        if (startPeriod >= billingPeriod) return emptyList()
+        val missed = mutableListOf<String>()
+        var p = startPeriod
+        while (p < billingPeriod) {
+            if (p !in settledPeriods && proratedAmount(account, p).toScaled2() > 0L) missed.add(p)
+            p = nextPeriod(p)
+        }
+        return missed
     }
+
+    /** Total un-billed arrears (Σ prorated over [missedPeriods]) as a 2dp String. */
+    fun arrearsAmount(
+        account: Account,
+        billingPeriod: String,
+        settledPeriods: Set<String>,
+    ): String =
+        missedPeriods(account, billingPeriod, settledPeriods)
+            .fold(0L) { acc, p -> acc + proratedAmount(account, p).toScaled2() }
+            .from2dp()
 
     // ----------------------------------------------------------------
     //  Date helpers
@@ -119,9 +175,10 @@ object ProrationEngine {
     private fun periodOf(d: LocalDate): String =
         "${d.year}-${d.monthNumber.toString().padStart(2, '0')}"
 
-    private fun currentPeriod(): String {
-        val now = Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date
-        return periodOf(now)
+    /** The "YYYY-MM" period one calendar month after [period]. */
+    private fun nextPeriod(period: String): String {
+        val (y, m) = parsePeriod(period)
+        return periodOf(LocalDate(y, m, 1).plus(1, DateTimeUnit.MONTH))
     }
 
     private fun daysInMonth(year: Int, month: Int): Int {

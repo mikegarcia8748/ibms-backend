@@ -20,6 +20,10 @@ data class NewTopSheetLine(
     val accountStatus: String?,
     val rfpNumber: String? = null,
     val rfpSortOrder: Int? = null,
+    /** Lumped recovery of un-billed prior periods; "0.00" when none. */
+    val arrearsAmount: String = "0.00",
+    /** The "YYYY-MM" periods folded into [arrearsAmount]. */
+    val arrearsPeriods: List<String> = emptyList(),
 )
 
 interface TopSheetRepository {
@@ -42,6 +46,13 @@ interface TopSheetRepository {
 
     /** Account ids already billed in [billingPeriod] (the double-billing guard set). */
     fun billedAccountIds(billingPeriod: String): Set<String>
+
+    /**
+     * Per-account set of periods already settled for [providerId] — the union of each
+     * non-draft line's own billing period and any periods it recovered as arrears.
+     * Used as the arrears double-recovery guard.
+     */
+    fun billedPeriodsByAccount(providerId: String): Map<String, Set<String>>
 
     fun approve(id: String, approverId: String, at: Instant): TopSheet?
 

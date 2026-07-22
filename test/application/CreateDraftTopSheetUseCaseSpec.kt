@@ -47,9 +47,11 @@ private val store050 = Store(
     proofOfInstallationId = "att2", createdAt = Instant.fromEpochSeconds(0),
 )
 
+// Installed on the 1st of the billing month: full-month charge, no prior periods,
+// so the (empty) mock billing history produces no incidental arrears.
 private fun acct(id: String, storeId: String) = Account(
     id = id, accountNumber = "acc-$id", providerId = "p1", storeId = storeId,
-    rate = "1000", installationDate = LocalDate(2026, 1, 1),
+    rate = "1000", installationDate = LocalDate(2026, 7, 1),
     status = AccountStatus.ACTIVE, createdAt = Instant.fromEpochSeconds(0),
 )
 

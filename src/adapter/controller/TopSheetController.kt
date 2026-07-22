@@ -13,6 +13,7 @@ import com.puregoldbe.ibms.application.usecase.PreviewCompilationUseCase
 import com.puregoldbe.ibms.application.usecase.RemoveDraftLineUseCase
 import com.puregoldbe.ibms.application.usecase.UpdateDraftLineUseCase
 import com.puregoldbe.ibms.domain.model.CompileRequest
+import com.puregoldbe.ibms.domain.model.ConfirmRequest
 import com.puregoldbe.ibms.domain.model.UserRole
 import io.ktor.server.request.*
 import io.ktor.server.routing.*
@@ -81,8 +82,9 @@ fun Route.topSheetRoutes(
         }
         post("/{id}/confirm") {
             val caller = call.authorize(UserRole.SECRETARY)
+            val req = runCatching { call.receiveNullable<ConfirmRequest>() }.getOrNull() ?: ConfirmRequest()
             val idem = call.idempotencyContext(caller.userId, "topsheet.confirm:${call.pathId()}")
-            call.ok(confirmDraft(call.pathId(), caller.userId, idem))
+            call.ok(confirmDraft(call.pathId(), caller.userId, req.acknowledgeArrears, idem))
         }
         get("/{id}") {
             call.authorize()
