@@ -160,6 +160,34 @@ class ConfirmTopSheetUseCaseSpec : BehaviorSpec({
         }
     }
 
+    Given("a DRAFT topsheet with no providerId (legacy/manual data)") {
+        val orphanDraft = draftTopsheet.copy(providerId = null)
+        every { topsheets.findById("ts1") } returns orphanDraft
+        every { topsheets.findLines("ts1") } returns listOf(
+            line("l1", "a1", "010001"), line("l2", "a2", "010002"),
+        )
+
+        When("confirming") {
+            Then("it is rejected with a clean Conflict instead of a raw NPE") {
+                shouldThrow<DomainError.Conflict> { useCase("ts1", "confirmer") }
+                verify(exactly = 0) { accounts.list(any(), any(), any()) }
+                verify(exactly = 0) { sequences.nextValue(any()) }
+            }
+        }
+    }
+
+    Given("a DRAFT topsheet whose lines were all removed (empty line list)") {
+        every { topsheets.findById("ts1") } returns draftTopsheet
+        every { topsheets.findLines("ts1") } returns emptyList()
+
+        When("confirming") {
+            Then("it is rejected with a Conflict instead of minting a 0-account invoice") {
+                shouldThrow<DomainError.Conflict> { useCase("ts1", "confirmer") }
+                verify(exactly = 0) { sequences.nextValue(any()) }
+            }
+        }
+    }
+
     Given("an Idempotency-Key and two identical confirm requests") {
         every { topsheets.findById("ts1") } returns draftTopsheet
         every { topsheets.findLines("ts1") } returns listOf(

@@ -19,6 +19,12 @@ fun buildDataSource(cfg: DbConfig): DataSource =
         maximumPoolSize = cfg.poolSize
         driverClassName = "org.postgresql.Driver"
         poolName = "ibms-pool"
+        // Retire pooled connections before the server/infra silently closes idle
+        // ones (the "This connection has been closed" housekeeper warnings). Keep
+        // maxLifetime below the server's idle cutoff, and probe idle connections
+        // periodically so dead ones are replaced proactively rather than on use.
+        maxLifetime = 15 * 60 * 1000L
+        keepaliveTime = 5 * 60 * 1000L
     })
 
 fun migrate(dataSource: DataSource) {

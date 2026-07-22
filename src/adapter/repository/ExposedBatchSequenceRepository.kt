@@ -18,6 +18,10 @@ class ExposedBatchSequenceRepository : BatchSequenceRepository {
 
     override fun nextValue(providerId: String): Int {
         val uuid = providerId.toUuid()
+        // Self-heal: ensure the row exists so a provider that was never seeded
+        // (e.g. created via bulk import before it seeded batch sequences) mints
+        // a batch number instead of throwing on the .single() below.
+        seed(providerId)
         val current = BatchSequences.selectAll()
             .where { BatchSequences.providerId eq uuid }
             .forUpdate()
