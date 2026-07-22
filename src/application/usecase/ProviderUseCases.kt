@@ -5,6 +5,7 @@ import com.puregoldbe.ibms.domain.model.CursorPage
 import com.puregoldbe.ibms.domain.model.Provider
 import com.puregoldbe.ibms.domain.model.ProviderStatus
 import com.puregoldbe.ibms.domain.port.Clock
+import com.puregoldbe.ibms.domain.port.BatchSequenceRepository
 import com.puregoldbe.ibms.domain.port.InvoiceSequenceRepository
 import com.puregoldbe.ibms.domain.port.ProviderRepository
 import com.puregoldbe.ibms.domain.port.TransactionRunner
@@ -25,6 +26,7 @@ class ListProvidersUseCase(
 class CreateProviderUseCase(
     private val providers: ProviderRepository,
     private val sequences: InvoiceSequenceRepository,
+    private val batchSequences: BatchSequenceRepository,
     private val tx: TransactionRunner,
 ) {
     suspend operator fun invoke(name: String, paymentScheduleDay: Int): Provider = tx.inTransaction {
@@ -32,6 +34,7 @@ class CreateProviderUseCase(
         if (paymentScheduleDay !in 1..31) throw DomainError.Validation("paymentScheduleDay must be 1..31")
         val provider = providers.create(name.trim(), paymentScheduleDay)
         sequences.seed(provider.id, InvoiceNumberFormatter.prefix(provider.name))
+        batchSequences.seed(provider.id)
         provider
     }
 }

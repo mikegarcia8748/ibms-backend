@@ -30,3 +30,9 @@ data class ProviderImportSummary(
     val accountsCreated: Int,
     val accountsReused: Int,
 )
+
+@Serializable
+data class UpdateLineRequest(
+    val rfpNumber: String? = null,
+    val proratedAmount: String? = null,
+)

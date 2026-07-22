@@ -66,6 +66,7 @@ fun Application.moduleWith(cfg: AppConfig) {
     val sessions = ExposedSessionRepository()
     val providers = ExposedProviderRepository()
     val sequences = ExposedInvoiceSequenceRepository()
+    val batchSequences = ExposedBatchSequenceRepository()
     val attachments = ExposedAttachmentRepository()
     val stores = ExposedStoreRepository()
     val accounts = ExposedAccountRepository()
@@ -94,7 +95,7 @@ fun Application.moduleWith(cfg: AppConfig) {
     val updateUserRole = UpdateUserRoleUseCase(users, tx)
     val updateUserStatus = UpdateUserStatusUseCase(users, tx)
     val listProviders = ListProvidersUseCase(providers, tx)
-    val createProvider = CreateProviderUseCase(providers, sequences, tx)
+    val createProvider = CreateProviderUseCase(providers, sequences, batchSequences, tx)
     val updateProvider = UpdateProviderUseCase(providers, tx)
     val deactivateProvider = DeactivateProviderUseCase(providers, clock, tx)
     val listStores = ListStoresUseCase(stores, tx)
@@ -122,6 +123,10 @@ fun Application.moduleWith(cfg: AppConfig) {
     val getTopSheetDetails = GetTopSheetDetailsUseCase(topsheets, tx)
     val approveTopSheet = ApproveTopSheetUseCase(topsheets, activities, clock, tx)
     val payTopSheet = PayTopSheetUseCase(topsheets, idempotency, clock, tx)
+    val createDraftTopSheet = CreateDraftTopSheetUseCase(accounts, stores, providers, topsheets, batchSequences, sequences, idempotency, activities, clock, tx)
+    val updateDraftLine = UpdateDraftLineUseCase(topsheets, tx)
+    val removeDraftLine = RemoveDraftLineUseCase(topsheets, activities, tx)
+    val confirmTopSheet = ConfirmTopSheetUseCase(accounts, stores, topsheets, sequences, idempotency, activities, clock, tx)
     val exportTopSheet = ExportTopSheetExcelUseCase(topsheets, tx)
     val expireGrace = ExpireGracePeriodAccountsUseCase(accounts, clock, tx)
     val listActivities = ListActivitiesUseCase(activities, tx)
@@ -168,7 +173,8 @@ fun Application.moduleWith(cfg: AppConfig) {
             activityRoutes(listActivities)
             ocrRoutes(triggerOcr, listOcrBatches, getOcrBatchRows, listOcrTemplates, createOcrTemplate, updateOcrTemplate)
             topSheetRoutes(
-                previewCompilation, compileTopSheet, listTopSheets, getTopSheet,
+                previewCompilation, compileTopSheet, createDraftTopSheet, updateDraftLine,
+                removeDraftLine, confirmTopSheet, listTopSheets, getTopSheet,
                 getTopSheetDetails, approveTopSheet, payTopSheet,
             )
             exportRoutes(exportTopSheet)
