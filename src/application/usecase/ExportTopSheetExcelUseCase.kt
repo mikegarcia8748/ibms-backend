@@ -42,10 +42,10 @@ class ExportTopSheetExcelUseCase(
         sheet.createRow(r++).createCell(0).setCellValue("TopSheet Report")
         r++
 
-        fun meta(label: String, value: String) {
+        fun meta(label: String, value: String?) {
             val row = sheet.createRow(r++)
             row.createCell(0).apply { setCellValue(label); cellStyle = bold }
-            row.createCell(1).setCellValue(value)
+            row.createCell(1).setCellValue(value ?: "")
         }
         meta("Provider:", ts.providerName ?: "N/A")
         meta("Invoice:", ts.invoiceNumber)
@@ -81,7 +81,7 @@ class ExportTopSheetExcelUseCase(
                 createCell(3).setCellValue(line.circuitId ?: "")
                 createCell(4).setCellValue(line.accountNumber ?: "")
                 createCell(5).setCellValue(line.proratedAmount.toDouble()) // display only; total is BigDecimal
-                createCell(6).setCellValue(ts.invoiceNumber)
+                createCell(6).setCellValue(ts.invoiceNumber ?: "")
             }
         }
 

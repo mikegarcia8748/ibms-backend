@@ -150,8 +150,15 @@ object InvoiceSequences : Table("invoice_sequences") {
     override val primaryKey = PrimaryKey(providerId)
 }
 
+object BatchSequences : Table("batch_sequences") {
+    val providerId   = reference("provider_id", Providers)
+    val currentValue = integer("current_value")
+    override val primaryKey = PrimaryKey(providerId)
+}
+
 object TopSheets : UUIDTable("topsheets") {
-    val invoiceNumber        = text("invoice_number").uniqueIndex()
+    val invoiceNumber        = text("invoice_number").nullable().uniqueIndex()
+    val batchNumber          = text("batch_number").nullable()
     val billingPeriod        = text("billing_period")
     val providerId           = reference("provider_id", Providers).nullable()
     val providerName         = text("provider_name").nullable()
@@ -180,6 +187,8 @@ object TopSheetDetails : UUIDTable("topsheet_details") {
     val circuitId      = text("circuit_id").nullable()
     val accountNumber  = text("account_number").nullable()
     val accountStatus  = text("account_status").nullable()
+    val rfpNumber      = text("rfp_number").nullable()
+    val rfpSortOrder   = short("rfp_sort_order").nullable()
     val createdAt      = timestamp("created_at")
 }
 

@@ -18,6 +18,8 @@ data class NewTopSheetLine(
     val circuitId: String?,
     val accountNumber: String?,
     val accountStatus: String?,
+    val rfpNumber: String? = null,
+    val rfpSortOrder: Int? = null,
 )
 
 interface TopSheetRepository {
@@ -45,6 +47,20 @@ interface TopSheetRepository {
 
     /** Move to paid and cascade all line items to paid. */
     fun pay(id: String, at: Instant): TopSheet?
+
+    fun createDraft(
+        billingPeriod: String,
+        providerId: String?,
+        providerName: String?,
+        accountCount: Int,
+        totalAmount: String,
+        batchNumber: String,
+        compilerId: String,
+    ): TopSheet
+
+    fun updateLine(detailId: String, rfpNumber: String?, proratedAmount: String?): TopSheetDetail?
+    fun removeLine(detailId: String): Boolean
+    fun confirm(id: String, invoiceNumber: String, accountCount: Int, totalAmount: String): TopSheet?
 }
 
 interface TransferRepository {
@@ -60,4 +76,9 @@ interface TransferRepository {
 
     /** Transfers involving [accountId] (as source or destination), or all when null. */
     fun page(accountId: String?, cursor: String?, limit: Int): CursorPage<TransferRecord>
+}
+
+interface BatchSequenceRepository {
+    fun seed(providerId: String)
+    fun nextValue(providerId: String): Int
 }

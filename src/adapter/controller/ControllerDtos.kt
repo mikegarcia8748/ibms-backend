@@ -12,3 +12,30 @@ data class UpdateProviderRequest(val name: String? = null, val paymentScheduleDa
 
 @Serializable
 data class RejectChangeRequestBody(val reason: String)
+
+/** Summary of a bulk-import run: counts of entities created vs reused, plus skip reasons. */
+@Serializable
+data class BulkImportSummary(
+    val providers: List<ProviderImportSummary>,
+    val storesCreated: Int,
+    val storesReused: Int,
+    val accountsCreated: Int,
+    val accountsReused: Int,
+    val rowsSkipped: Int,
+    val skipReasons: List<String>,
+    val totalRows: Int,
+)
+
+@Serializable
+data class ProviderImportSummary(
+    val name: String,
+    val created: Boolean,
+    val accountsCreated: Int,
+    val accountsReused: Int,
+)
+
+@Serializable
+data class UpdateLineRequest(
+    val rfpNumber: String? = null,
+    val proratedAmount: String? = null,
+)

@@ -79,3 +79,7 @@ suspend inline fun <reified T> ApplicationCall.accepted(data: T, message: String
 /** Success envelope carrying `data: null` (concrete-typed; avoids serializing Unit as `{}`). */
 suspend fun ApplicationCall.okEmpty(message: String = "success") =
     respond(HttpStatusCode.OK, ApiResponse<String?>("success", message, HttpStatusCode.OK.value.toString(), null))
+
+/** Respond 204 No Content with no body. */
+suspend fun ApplicationCall.noContent() =
+    respond(HttpStatusCode.NoContent)

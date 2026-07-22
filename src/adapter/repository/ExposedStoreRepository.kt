@@ -27,6 +27,9 @@ class ExposedStoreRepository : StoreRepository {
         return Stores.selectAll().where { Stores.id eq uuid }.map { it.toStore() }.singleOrNull()
     }
 
+    override fun findByBranchCode(branchCode: String): Store? =
+        Stores.selectAll().where { Stores.branchCode eq branchCode }.map { it.toStore() }.singleOrNull()
+
     override fun list(status: StoreStatus?, query: String?): List<Store> =
         Stores.selectAll()
             .apply { if (status != null) andWhere { Stores.status eq status } }

@@ -63,6 +63,8 @@ class ExposedTopSheetRepository : TopSheetRepository {
             line.circuitId?.let { row[TopSheetDetails.circuitId] = it }
             line.accountNumber?.let { row[TopSheetDetails.accountNumber] = it }
             line.accountStatus?.let { row[TopSheetDetails.accountStatus] = it }
+            line.rfpNumber?.let { row[TopSheetDetails.rfpNumber] = it }
+            line.rfpSortOrder?.let { row[TopSheetDetails.rfpSortOrder] = it.toShort() }
         }
     }
 
@@ -104,8 +106,9 @@ class ExposedTopSheetRepository : TopSheetRepository {
     }
 
     override fun billedAccountIds(billingPeriod: String): Set<String> =
-        TopSheetDetails.selectAll()
-            .where { TopSheetDetails.billingPeriod eq billingPeriod }
+        TopSheetDetails.innerJoin(TopSheets)
+            .selectAll()
+            .where { (TopSheetDetails.billingPeriod eq billingPeriod) and (TopSheets.status neq TopSheetStatus.DRAFT) }
             .map { it[TopSheetDetails.accountId].value.toString() }
             .toSet()
 
@@ -132,9 +135,58 @@ class ExposedTopSheetRepository : TopSheetRepository {
         return findById(id)
     }
 
+    override fun createDraft(
+        billingPeriod: String,
+        providerId: String?,
+        providerName: String?,
+        accountCount: Int,
+        totalAmount: String,
+        batchNumber: String,
+        compilerId: String,
+    ): TopSheet {
+        val id = TopSheets.insertAndGetId { row ->
+            row[TopSheets.billingPeriod] = billingPeriod
+            if (providerId != null) row[TopSheets.providerId] = EntityID(providerId.toUuid(), Providers)
+            if (providerName != null) row[TopSheets.providerName] = providerName
+            row[TopSheets.accountCount] = accountCount
+            row[TopSheets.totalAmount] = totalAmount.toMoney()
+            row[TopSheets.batchNumber] = batchNumber
+            row[TopSheets.status] = TopSheetStatus.DRAFT
+            row[TopSheets.compilerId] = EntityID(compilerId.toUuid(), Users)
+        }.value
+        return findById(id.toString())!!
+    }
+
+    override fun updateLine(detailId: String, rfpNumber: String?, proratedAmount: String?): TopSheetDetail? {
+        val uuid = detailId.toUuidOrNull() ?: return null
+        val n = TopSheetDetails.update({ TopSheetDetails.id eq uuid }) {
+            if (rfpNumber != null) it[TopSheetDetails.rfpNumber] = rfpNumber
+            if (proratedAmount != null) it[TopSheetDetails.proratedAmount] = proratedAmount.toMoney()
+        }
+        if (n == 0) return null
+        return TopSheetDetails.selectAll().where { TopSheetDetails.id eq uuid }.map { it.toDetail() }.singleOrNull()
+    }
+
+    override fun removeLine(detailId: String): Boolean {
+        val uuid = detailId.toUuidOrNull() ?: return false
+        return TopSheetDetails.deleteWhere { TopSheetDetails.id eq uuid } > 0
+    }
+
+    override fun confirm(id: String, invoiceNumber: String, accountCount: Int, totalAmount: String): TopSheet? {
+        val uuid = id.toUuidOrNull() ?: return null
+        val n = TopSheets.update({ (TopSheets.id eq uuid) and (TopSheets.status eq TopSheetStatus.DRAFT) }) {
+            it[TopSheets.status] = TopSheetStatus.COMPILED
+            it[TopSheets.invoiceNumber] = invoiceNumber
+            it[TopSheets.accountCount] = accountCount
+            it[TopSheets.totalAmount] = totalAmount.toMoney()
+        }
+        return if (n == 0) null else findById(id)
+    }
+
     private fun ResultRow.toTopSheet() = TopSheet(
         id = this[TopSheets.id].value.toString(),
         invoiceNumber = this[TopSheets.invoiceNumber],
+        batchNumber = this[TopSheets.batchNumber],
         billingPeriod = this[TopSheets.billingPeriod],
         providerId = this[TopSheets.providerId]?.value?.toString(),
         providerName = this[TopSheets.providerName],
@@ -161,5 +213,7 @@ class ExposedTopSheetRepository : TopSheetRepository {
         circuitId = this[TopSheetDetails.circuitId],
         accountNumber = this[TopSheetDetails.accountNumber],
         accountStatus = this[TopSheetDetails.accountStatus],
+        rfpNumber = this[TopSheetDetails.rfpNumber],
+        rfpSortOrder = this[TopSheetDetails.rfpSortOrder]?.toInt(),
     )
 }

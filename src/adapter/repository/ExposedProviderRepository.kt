@@ -22,6 +22,9 @@ class ExposedProviderRepository : ProviderRepository {
         return Providers.selectAll().where { Providers.id eq uuid }.map { it.toProvider() }.singleOrNull()
     }
 
+    override fun findByName(name: String): Provider? =
+        Providers.selectAll().where { Providers.name eq name }.map { it.toProvider() }.singleOrNull()
+
     override fun list(status: ProviderStatus?): List<Provider> =
         Providers.selectAll()
             .apply { if (status != null) andWhere { Providers.status eq status } }
