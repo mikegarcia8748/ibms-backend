@@ -146,7 +146,6 @@ fun Application.moduleWith(cfg: AppConfig) {
 
     // --- Cross-cutting plugins ---
     configureStatusPages()
-    configureAuthentication(jwtService)
     install(CORS) {
         allowMethod(HttpMethod.Get)
         allowMethod(HttpMethod.Post)
@@ -155,12 +154,14 @@ fun Application.moduleWith(cfg: AppConfig) {
         allowMethod(HttpMethod.Delete)
         allowHeader(HttpHeaders.Authorization)
         allowHeader(HttpHeaders.ContentType)
+        allowHeader("Idempotency-Key")
         if (cfg.corsAllowedHosts.isEmpty()) {
             anyHost()
         } else {
             cfg.corsAllowedHosts.forEach { allowHost(it, schemes = listOf("http", "https")) }
         }
     }
+    configureAuthentication(jwtService)
 
     // --- First-run credential for the seeded sysadmin (no-op once one exists) ---
     installBootstrapAdminCredentials(cfg.auth, users, passwordHasher, secrets, sessionPolicy, clock, tx)
