@@ -32,7 +32,6 @@ typealias Money = String   // decimal string, 2 dp; parse with BigDecimal(value)
 enum class UserRole {
     @SerialName("sysadmin")  SYSADMIN,
     @SerialName("secretary") SECRETARY,
-    @SerialName("payables")  PAYABLES,
     @SerialName("finance")   FINANCE,
     @SerialName("manager")   MANAGER,
     @SerialName("pending")   PENDING,
