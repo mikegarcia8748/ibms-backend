@@ -51,10 +51,18 @@ private fun acct(id: String, status: AccountStatus = AccountStatus.ACTIVE) = Acc
 )
 
 /** A draft line; [rfpNumber] is null until the Secretary fills it in. */
-private fun line(id: String, accountId: String, rfpNumber: String?, amount: String = "1000.00") = TopSheetDetail(
+private fun line(
+    id: String,
+    accountId: String,
+    rfpNumber: String?,
+    amount: String = "1000.00",
+    arrearsAmount: String = "0.00",
+    arrearsPeriods: List<String> = emptyList(),
+) = TopSheetDetail(
     id = id, topsheetId = "ts1", accountId = accountId, billingPeriod = "2026-07",
     proratedAmount = amount, fullAmount = "1000.00", status = TopSheetLineStatus.BILLED,
     rfpNumber = rfpNumber, rfpSortOrder = 1,
+    arrearsAmount = arrearsAmount, arrearsPeriods = arrearsPeriods,
 )
 
 /**
@@ -188,6 +196,34 @@ class ConfirmTopSheetUseCaseSpec : BehaviorSpec({
         }
     }
 
+    Given("a DRAFT topsheet carrying an arrears line") {
+        every { topsheets.findById("ts1") } returns draftTopsheet
+        every { topsheets.findLines("ts1") } returns listOf(
+            line("l1", "a1", "010001"),
+            line("l2", "a2", "010002", arrearsAmount = "500.00", arrearsPeriods = listOf("2026-06")),
+        )
+        every { accounts.list(null, "p1", null) } returns listOf(acct("a1"), acct("a2"))
+        every { topsheets.billedAccountIds("2026-07") } returns emptySet()
+        every { sequences.nextValue("p1") } returns 1
+        every { sequences.prefixOf("p1") } returns "CONV-"
+        every { topsheets.confirm(any(), any(), any(), any()) } returns compiledTopsheet
+
+        When("confirming without acknowledging arrears") {
+            Then("it is rejected with a Validation error") {
+                shouldThrow<DomainError.Validation> { useCase("ts1", "confirmer") }
+                verify(exactly = 0) { topsheets.confirm(any(), any(), any(), any()) }
+            }
+        }
+
+        When("confirming with acknowledgeArrears = true") {
+            useCase("ts1", "confirmer", acknowledgeArrears = true)
+
+            Then("the total includes the arrears (2 × 1000 + 500)") {
+                verify(exactly = 1) { topsheets.confirm("ts1", "CONV-202607-0001", 2, "2500.00") }
+            }
+        }
+    }
+
     Given("an Idempotency-Key and two identical confirm requests") {
         every { topsheets.findById("ts1") } returns draftTopsheet
         every { topsheets.findLines("ts1") } returns listOf(
@@ -201,8 +237,8 @@ class ConfirmTopSheetUseCaseSpec : BehaviorSpec({
         val ctx = IdempotencyContext(key = "idem-confirm-1", requestHash = "hash-1", userId = "confirmer")
 
         When("confirming twice with the same key") {
-            val first = useCase("ts1", "confirmer", ctx)
-            val second = useCase("ts1", "confirmer", ctx)
+            val first = useCase("ts1", "confirmer", idem = ctx)
+            val second = useCase("ts1", "confirmer", idem = ctx)
 
             Then("the second call replays the stored result and confirm ran only once") {
                 first.id shouldBe "ts1"

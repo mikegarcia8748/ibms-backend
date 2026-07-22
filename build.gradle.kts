@@ -68,6 +68,12 @@ dependencies {
 
 tasks.test {
     useJUnitPlatform()
+
+    systemProperties(
+        System.getProperties()
+            .mapKeys { it.key.toString() }
+            .filterKeys { it.startsWith("kotest.") }
+    )
 }
 
 ktor {

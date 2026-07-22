@@ -207,6 +207,8 @@ data class TopSheetDetail(
     val accountStatus: String? = null,
     val rfpNumber: String? = null,
     val rfpSortOrder: Int? = null,
+    val arrearsAmount: Money = "0.00",
+    val arrearsPeriods: List<String> = emptyList(),
 )
 
 @Serializable
@@ -377,12 +379,20 @@ data class DeactivateAccountRequest(val proofId: String)
 @Serializable
 data class CompileRequest(val providerId: String, val billingPeriod: String)
 
+/** Optional body for /topsheets/{id}/confirm — acknowledge recovered arrears. */
+@Serializable
+data class ConfirmRequest(val acknowledgeArrears: Boolean = false)
+
 /** Preview result — the eligible line the Secretary reviews before compiling. */
 @Serializable
 data class CompilablePreview(
     val providerId: String,
     val billingPeriod: String,
     val lines: List<CompilableLine>,
+    /** Subset of [lines] carrying recovered arrears — surfaced for explicit acknowledgement. */
+    val arrears: List<CompilableLine> = emptyList(),
+    /** Accounts whose subscription starts after the selected period (validation warning). */
+    val notYetSubscribed: List<NotYetSubscribedLine> = emptyList(),
     val totalAmount: Money,
 )
 
@@ -396,7 +406,20 @@ data class CompilableLine(
     val fullAmount: Money,          // MRC
     val proratedAmount: Money,
     val isProrated: Boolean,
+    val isArrears: Boolean = false,
+    val arrearsAmount: Money = "0.00",
+    val arrearsPeriods: List<String> = emptyList(),
     val storeId: String? = null,
+)
+
+/** An account the reviewer selected a period for before its subscription began. */
+@Serializable
+data class NotYetSubscribedLine(
+    val accountId: String,
+    val accountNumber: String,
+    val storeName: String?,
+    val subscriptionStart: String,   // "YYYY-MM-DD"
+    val billingPeriod: String,       // the (too-early) period that was selected
 )
 
 // =====================================================================

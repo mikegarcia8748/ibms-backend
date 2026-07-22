@@ -65,6 +65,8 @@ class ExposedTopSheetRepository : TopSheetRepository {
             line.accountStatus?.let { row[TopSheetDetails.accountStatus] = it }
             line.rfpNumber?.let { row[TopSheetDetails.rfpNumber] = it }
             line.rfpSortOrder?.let { row[TopSheetDetails.rfpSortOrder] = it.toShort() }
+            row[TopSheetDetails.arrearsAmount] = line.arrearsAmount.toMoney()
+            row[TopSheetDetails.arrearsPeriods] = line.arrearsPeriods.takeIf { it.isNotEmpty() }?.joinToString(",")
         }
     }
 
@@ -111,6 +113,22 @@ class ExposedTopSheetRepository : TopSheetRepository {
             .where { (TopSheetDetails.billingPeriod eq billingPeriod) and (TopSheets.status neq TopSheetStatus.DRAFT) }
             .map { it[TopSheetDetails.accountId].value.toString() }
             .toSet()
+
+    override fun billedPeriodsByAccount(providerId: String): Map<String, Set<String>> {
+        val out = mutableMapOf<String, MutableSet<String>>()
+        TopSheetDetails.innerJoin(TopSheets)
+            .selectAll()
+            .where { (TopSheets.providerId eq providerId.toUuid()) and (TopSheets.status neq TopSheetStatus.DRAFT) }
+            .forEach { row ->
+                val acct = row[TopSheetDetails.accountId].value.toString()
+                val periods = out.getOrPut(acct) { mutableSetOf() }
+                periods.add(row[TopSheetDetails.billingPeriod])
+                row[TopSheetDetails.arrearsPeriods]
+                    ?.split(",")?.filter { it.isNotBlank() }
+                    ?.let { periods.addAll(it) }
+            }
+        return out
+    }
 
     override fun approve(id: String, approverId: String, at: Instant): TopSheet? {
         val uuid = id.toUuidOrNull() ?: return null
@@ -215,5 +233,8 @@ class ExposedTopSheetRepository : TopSheetRepository {
         accountStatus = this[TopSheetDetails.accountStatus],
         rfpNumber = this[TopSheetDetails.rfpNumber],
         rfpSortOrder = this[TopSheetDetails.rfpSortOrder]?.toInt(),
+        arrearsAmount = this[TopSheetDetails.arrearsAmount].toMoneyString(),
+        arrearsPeriods = this[TopSheetDetails.arrearsPeriods]
+            ?.split(",")?.filter { it.isNotBlank() } ?: emptyList(),
     )
 }

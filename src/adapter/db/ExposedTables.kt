@@ -189,6 +189,8 @@ object TopSheetDetails : UUIDTable("topsheet_details") {
     val accountStatus  = text("account_status").nullable()
     val rfpNumber      = text("rfp_number").nullable()
     val rfpSortOrder   = short("rfp_sort_order").nullable()
+    val arrearsAmount  = decimal("arrears_amount", 14, 2)
+    val arrearsPeriods = text("arrears_periods").nullable()
     val createdAt      = timestamp("created_at")
 }
 

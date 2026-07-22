@@ -5,6 +5,7 @@ import com.puregoldbe.ibms.domain.model.Account
 import com.puregoldbe.ibms.domain.model.CompilableLine
 import com.puregoldbe.ibms.domain.model.CompilablePreview
 import com.puregoldbe.ibms.domain.model.CursorPage
+import com.puregoldbe.ibms.domain.model.NotYetSubscribedLine
 import com.puregoldbe.ibms.domain.model.Store
 import com.puregoldbe.ibms.domain.model.TopSheet
 import com.puregoldbe.ibms.domain.model.TopSheetDetail
@@ -36,8 +37,26 @@ internal data class EligibleLine(
     val store: Store?,
     val proratedAmount: String,
     val isProrated: Boolean,
+    /** Lumped recovery of un-billed prior periods; "0.00" when none. */
+    val arrearsAmount: String = "0.00",
+    /** The "YYYY-MM" periods folded into [arrearsAmount], for review/audit. */
+    val arrearsPeriods: List<String> = emptyList(),
+) {
+    val isArrears: Boolean get() = arrearsPeriods.isNotEmpty()
+}
+
+/** The three review buckets a Secretary sees before compiling. */
+internal data class Classified(
+    /** Bill-now lines (may be flagged [EligibleLine.isArrears]). */
+    val billable: List<EligibleLine>,
+    /** Accounts whose subscription starts after the selected period (validation warning). */
+    val notYetSubscribed: List<Account>,
 )
 
+/**
+ * Legacy current-period-only projection (no arrears). Retained for the deprecated
+ * [CompileTopSheetUseCase] so its behavior is unchanged.
+ */
 internal fun computeEligible(
     providerId: String,
     billingPeriod: String,
@@ -54,6 +73,46 @@ internal fun computeEligible(
             isProrated = ProrationEngine.isFirstBillProrated(acc, billingPeriod),
         )
     }
+
+/**
+ * Two-phase classification: split a provider's accounts into bill-now (with any
+ * arrears folded in and flagged) and not-yet-subscribed (surfaced as a validation
+ * warning rather than silently dropped). Accounts excluded for other reasons —
+ * terminated past grace, transferred, wrong provider, already billed this period —
+ * fall out of both buckets exactly as before.
+ *
+ * [billedThisPeriod] is the current-period double-billing guard; [settledByAccount]
+ * is each account's full history of billed + arrears-recovered periods, used to
+ * decide which prior partials are still owed.
+ */
+internal fun classify(
+    providerId: String,
+    billingPeriod: String,
+    accounts: List<Account>,
+    storesById: Map<String, Store>,
+    billedThisPeriod: Set<String>,
+    settledByAccount: Map<String, Set<String>>,
+): Classified {
+    val billable = mutableListOf<EligibleLine>()
+    val notYetSubscribed = mutableListOf<Account>()
+    for (acc in accounts) {
+        if (ProrationEngine.isEligible(acc, providerId, billingPeriod, billedThisPeriod)) {
+            val settled = settledByAccount[acc.id] ?: emptySet()
+            val arrearsPeriods = ProrationEngine.missedPeriods(acc, billingPeriod, settled)
+            billable += EligibleLine(
+                account = acc,
+                store = storesById[acc.storeId],
+                proratedAmount = ProrationEngine.proratedAmount(acc, billingPeriod),
+                isProrated = ProrationEngine.isFirstBillProrated(acc, billingPeriod),
+                arrearsAmount = ProrationEngine.arrearsAmount(acc, billingPeriod, settled),
+                arrearsPeriods = arrearsPeriods,
+            )
+        } else if (ProrationEngine.isNotYetSubscribed(acc, billingPeriod)) {
+            notYetSubscribed += acc
+        }
+    }
+    return Classified(billable, notYetSubscribed)
+}
 
 private fun requirePeriod(billingPeriod: String) {
     if (!BillingPeriod.isValid(billingPeriod)) {
@@ -73,39 +132,59 @@ private fun requireNotFuturePeriod(billingPeriod: String, clock: Clock) {
 }
 
 private fun List<EligibleLine>.total(): String =
-    fold(BigDecimal.ZERO) { acc, line -> acc + line.proratedAmount.toMoney() }.toMoneyString()
+    fold(BigDecimal.ZERO) { acc, line ->
+        acc + line.proratedAmount.toMoney() + line.arrearsAmount.toMoney()
+    }.toMoneyString()
 
 /** Pure read: the eligible lines + prorated amounts a Secretary reviews before compiling. */
 class PreviewCompilationUseCase(
     private val accounts: AccountRepository,
     private val stores: StoreRepository,
     private val topsheets: TopSheetRepository,
+    private val clock: Clock,
     private val tx: TransactionRunner,
 ) {
     suspend operator fun invoke(providerId: String, billingPeriod: String): CompilablePreview = tx.inTransaction {
-        requirePeriod(billingPeriod)
+        requireNotFuturePeriod(billingPeriod, clock)
         val billed = topsheets.billedAccountIds(billingPeriod)
+        val settled = topsheets.billedPeriodsByAccount(providerId)
         val storesById = stores.list(null, null).associateBy { it.id }
-        val lines = computeEligible(providerId, billingPeriod, accounts.list(null, providerId, null), storesById, billed)
+        val classified = classify(
+            providerId, billingPeriod, accounts.list(null, providerId, null), storesById, billed, settled,
+        )
         CompilablePreview(
             providerId = providerId,
             billingPeriod = billingPeriod,
-            lines = lines.map { e ->
-                CompilableLine(
-                    accountId = e.account.id,
-                    accountNumber = e.account.accountNumber,
-                    branchCode = e.store?.branchCode,
-                    storeName = e.store?.name,
-                    circuitId = e.account.circuitId,
-                    fullAmount = e.account.rate,
-                    proratedAmount = e.proratedAmount,
-                    isProrated = e.isProrated,
+            lines = classified.billable.map { it.toCompilableLine() },
+            arrears = classified.billable.filter { it.isArrears }.map { it.toCompilableLine() },
+            notYetSubscribed = classified.notYetSubscribed.map { acc ->
+                NotYetSubscribedLine(
+                    accountId = acc.id,
+                    accountNumber = acc.accountNumber,
+                    storeName = storesById[acc.storeId]?.name,
+                    subscriptionStart = ProrationEngine.subscriptionStart(acc).toString(),
+                    billingPeriod = billingPeriod,
                 )
             },
-            totalAmount = lines.total(),
+            totalAmount = classified.billable.total(),
         )
     }
 }
+
+private fun EligibleLine.toCompilableLine(): CompilableLine = CompilableLine(
+    accountId = account.id,
+    accountNumber = account.accountNumber,
+    branchCode = store?.branchCode,
+    storeName = store?.name,
+    circuitId = account.circuitId,
+    fullAmount = account.rate,
+    proratedAmount = proratedAmount,
+    isProrated = isProrated,
+    isArrears = isArrears,
+    arrearsAmount = arrearsAmount,
+    arrearsPeriods = arrearsPeriods,
+    storeId = account.storeId,
+)
 
 /**
  * @deprecated Use [CreateDraftTopSheetUseCase] + [ConfirmTopSheetUseCase] instead. Kept for backward compatibility.
@@ -277,9 +356,11 @@ class CreateDraftTopSheetUseCase(
             val provider = providers.findById(providerId)
                 ?: throw DomainError.NotFound("provider $providerId not found")
             val billed = topsheets.billedAccountIds(billingPeriod)
+            val settled = topsheets.billedPeriodsByAccount(providerId)
             val storesById = stores.list(null, null).associateBy { it.id }
-            val lines =
-                computeEligible(providerId, billingPeriod, accounts.list(null, providerId, null), storesById, billed)
+            val lines = classify(
+                providerId, billingPeriod, accounts.list(null, providerId, null), storesById, billed, settled,
+            ).billable
             if (lines.isEmpty()) {
                 throw DomainError.Conflict(
                     "no eligible accounts to compile for provider $providerId / $billingPeriod",
@@ -312,6 +393,8 @@ class CreateDraftTopSheetUseCase(
                         accountNumber = e.account.accountNumber,
                         accountStatus = e.account.status.name.lowercase(),
                         rfpSortOrder = index + 1,
+                        arrearsAmount = e.arrearsAmount,
+                        arrearsPeriods = e.arrearsPeriods,
                     )
                 )
             }
@@ -412,6 +495,7 @@ class ConfirmTopSheetUseCase(
     suspend operator fun invoke(
         topsheetId: String,
         confirmerId: String,
+        acknowledgeArrears: Boolean = false,
         idem: IdempotencyContext? = null,
     ): TopSheet = tx.inTransaction {
         idempotent(idempotency, "topsheet.confirm", idem, 200) {
@@ -427,6 +511,13 @@ class ConfirmTopSheetUseCase(
             val missingRfp = lines.filter { it.rfpNumber == null }
             if (missingRfp.isNotEmpty()) {
                 throw DomainError.Validation("All lines must have an RFP number before confirming")
+            }
+            // Arrears (recovered prior-period partials) must be explicitly acknowledged.
+            val arrearsLines = lines.filter { it.arrearsAmount.toMoney() > BigDecimal.ZERO }
+            if (arrearsLines.isNotEmpty() && !acknowledgeArrears) {
+                throw DomainError.Validation(
+                    "${arrearsLines.size} account(s) carry arrears; acknowledgeArrears is required to confirm",
+                )
             }
             val providerId = ts.providerId
                 ?: throw DomainError.Conflict("topsheet $topsheetId has no provider assigned", "missing_provider")
@@ -449,8 +540,10 @@ class ConfirmTopSheetUseCase(
             if (doubleBilled.isNotEmpty()) {
                 throw DomainError.Conflict("accounts already billed in this period: $doubleBilled")
             }
-            // Recalculate totals from current line values
-            val totalAmount = lines.fold(BigDecimal.ZERO) { acc, l -> acc + l.proratedAmount.toMoney() }.toMoneyString()
+            // Recalculate totals from current line values (current-period charge + arrears)
+            val totalAmount = lines
+                .fold(BigDecimal.ZERO) { acc, l -> acc + l.proratedAmount.toMoney() + l.arrearsAmount.toMoney() }
+                .toMoneyString()
             val accountCount = lines.size
             // Mint invoice number
             val sequence = sequences.nextValue(providerId)
