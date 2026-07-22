@@ -86,3 +86,31 @@ tasks.named<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJ
     duplicatesStrategy = DuplicatesStrategy.INCLUDE
     mergeServiceFiles()
 }
+
+// ---------------------------------------------------------------------------
+// Local dev: auto-load .env into ./gradlew run
+// ---------------------------------------------------------------------------
+// Parses a standard .env file (KEY=VALUE per line, # comments, blank lines)
+// and injects every entry into the run task's process environment. This lets
+// developers keep secrets / per-machine config out of version control while
+// still running `./gradlew run` without manual `export` calls.
+// IDE "Run Configurations" that delegate to Gradle inherit these automatically.
+// ---------------------------------------------------------------------------
+fun loadDotEnv(): Map<String, String> {
+    val envFile = file(".env")
+    if (!envFile.exists()) return emptyMap()
+    return envFile.readLines()
+        .filter { it.isNotBlank() && !it.trimStart().startsWith("#") }
+        .mapNotNull { line ->
+            val idx = line.indexOf('=')
+            if (idx > 0) line.substring(0, idx).trim() to line.substring(idx + 1).trim()
+            else null
+        }.toMap()
+}
+
+tasks.named<JavaExec>("run") {
+    environment(loadDotEnv())
+    // Override the Ktor port from application.yaml (8080) so the local JVM
+    // doesn't collide with the Docker-compose app container.
+    args("-port=8082")
+}
