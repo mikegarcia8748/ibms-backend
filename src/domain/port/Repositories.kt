@@ -138,3 +138,19 @@ interface AccountRepository {
     /** Start the 30-day grace window: status -> termination_requested, timestamp set. */
     fun markTerminationRequested(id: String, at: Instant): Account?
 }
+
+interface AccountChangeRequestRepository {
+    fun findById(id: String): AccountChangeRequest?
+    fun findPendingByAccountId(accountId: String): AccountChangeRequest?
+    fun page(
+        accountId: String? = null,
+        submittedById: String? = null,
+        status: AccountChangeRequestStatus? = null,
+        cursor: String? = null,
+        limit: Int,
+    ): CursorPage<AccountChangeRequest>
+    fun create(accountId: String, submittedById: String, input: SubmitAccountChangeRequestInput): AccountChangeRequest
+    fun approve(id: String, approverId: String, at: Instant): AccountChangeRequest?
+    fun reject(id: String, reason: String, at: Instant): AccountChangeRequest?
+    fun cancel(id: String, at: Instant): AccountChangeRequest?
+}

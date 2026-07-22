@@ -2,6 +2,7 @@ package com.puregoldbe.ibms.adapter.controller
 
 import com.puregoldbe.ibms.adapter.db.clampLimit
 import com.puregoldbe.ibms.domain.error.DomainError
+import com.puregoldbe.ibms.domain.model.AccountChangeRequestStatus
 import com.puregoldbe.ibms.domain.model.AccountStatus
 import com.puregoldbe.ibms.domain.model.ApiResponse
 import com.puregoldbe.ibms.domain.model.AttachmentPurpose
@@ -55,6 +56,7 @@ internal fun parseStoreStatus(raw: String?): StoreStatus? = parseEnum<StoreStatu
 internal fun parseAccountStatus(raw: String?): AccountStatus? = parseEnum<AccountStatus>(raw)
 internal fun parseAttachmentPurpose(raw: String?): AttachmentPurpose? = parseEnum<AttachmentPurpose>(raw)
 internal fun parseTopSheetStatus(raw: String?): TopSheetStatus? = parseEnum<TopSheetStatus>(raw)
+internal fun parseAccountChangeRequestStatus(raw: String?): AccountChangeRequestStatus? = parseEnum<AccountChangeRequestStatus>(raw)
 
 // ---------------------------------------------------------------------------
 //  Response envelope helpers (API_CONTRACT: {result, message, status, data}).

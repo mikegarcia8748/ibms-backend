@@ -76,6 +76,7 @@ fun Application.moduleWith(cfg: AppConfig) {
     val activities = ExposedActivityRepository()
     val ocrTemplates = ExposedOcrTemplateRepository()
     val ocrBatches = ExposedOcrBatchRepository()
+    val changeRequests = ExposedAccountChangeRequestRepository()
 
     // --- Use cases ---
     // Every path that ends in "signed in" mints its tokens through one issuer, so
@@ -136,6 +137,12 @@ fun Application.moduleWith(cfg: AppConfig) {
     val listOcrTemplates = ListOcrTemplatesUseCase(ocrTemplates, tx)
     val createOcrTemplate = CreateOcrTemplateUseCase(ocrTemplates, tx)
     val updateOcrTemplate = UpdateOcrTemplateUseCase(ocrTemplates, tx)
+    val submitChangeRequest = SubmitAccountChangeRequestUseCase(changeRequests, accounts, providers, attachments, activities, clock, tx)
+    val approveChangeRequest = ApproveAccountChangeRequestUseCase(changeRequests, accounts, providers, activities, clock, tx)
+    val rejectChangeRequest = RejectAccountChangeRequestUseCase(changeRequests, activities, clock, tx)
+    val cancelChangeRequest = CancelAccountChangeRequestUseCase(changeRequests, activities, clock, tx)
+    val getChangeRequestWithDiff = GetAccountChangeRequestWithDiffUseCase(changeRequests, accounts, tx)
+    val listChangeRequests = ListAccountChangeRequestsUseCase(changeRequests, tx)
 
     // --- Cross-cutting plugins ---
     configureStatusPages()
@@ -169,6 +176,7 @@ fun Application.moduleWith(cfg: AppConfig) {
             providerRoutes(listProviders, createProvider, updateProvider, deactivateProvider)
             storeRoutes(listStores, getStore, createStore, updateStore, closeStore, getFloating)
             accountRoutes(listAccounts, getAccount, createAccount, updateAccount, transferAccount, deactivateAccount, bulkImport)
+            accountChangeRequestRoutes(submitChangeRequest, approveChangeRequest, rejectChangeRequest, cancelChangeRequest, getChangeRequestWithDiff, listChangeRequests)
             transferRoutes(listTransfers, transferAccount)
             activityRoutes(listActivities)
             ocrRoutes(triggerOcr, listOcrBatches, getOcrBatchRows, listOcrTemplates, createOcrTemplate, updateOcrTemplate)

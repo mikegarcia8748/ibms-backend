@@ -269,3 +269,22 @@ object OcrExtractedRows : UUIDTable("ocr_extracted_rows") {
     val matchedAccountId   = reference("matched_account_id", Accounts).nullable()
     val reconciled         = bool("reconciled")
 }
+
+object AccountChangeRequests : UUIDTable("account_change_requests") {
+    val accountId           = reference("account_id", Accounts)
+    val submittedById       = reference("submitted_by_id", Users)
+    val status              = pgEnum<AccountChangeRequestStatus>("status", "account_change_request_status")
+    val accountNumberNew    = text("account_number_new").nullable()
+    val installationDateNew = date("installation_date_new").nullable()
+    val rateNew             = decimal("rate_new", 14, 2).nullable()
+    val providerIdNew       = reference("provider_id_new", Providers).nullable()
+    val circuitIdNew        = text("circuit_id_new").nullable()
+    val planNameNew         = text("plan_name_new").nullable()
+    val proofAttachmentId   = reference("proof_attachment_id", Attachments).nullable()
+    val approvedById        = reference("approved_by_id", Users).nullable()
+    val approvedAt          = timestamp("approved_at").nullable()
+    val rejectedReason      = text("rejected_reason").nullable()
+    val cancelledAt         = timestamp("cancelled_at").nullable()
+    val createdAt           = timestamp("created_at")
+    val updatedAt           = timestamp("updated_at")
+}
