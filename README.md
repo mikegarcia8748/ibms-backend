@@ -26,7 +26,7 @@ unit-testable with in-memory fakes. Ports live in `domain/port`; adapters implem
 
 ## Prerequisites
 - Docker (for local Postgres and Testcontainers)
-- JDK 21 (the Gradle toolchain resolves/provisions it; `./gradlew` downloads Gradle itself on first run).
+- JDK 25 (the Gradle toolchain auto-provisions it via the foojay resolver; `./gradlew` downloads Gradle itself on first run).
 
 ## Run locally
 ```bash

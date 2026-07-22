@@ -12,7 +12,7 @@ application {
 }
 
 kotlin {
-    jvmToolchain(21)
+    jvmToolchain(25)
 }
 
 // Flat layout carried over from Amper: sources in src/, tests in test/, resources in resources/.

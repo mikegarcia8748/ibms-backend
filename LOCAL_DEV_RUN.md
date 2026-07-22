@@ -1,13 +1,16 @@
 # Running the Backend Locally
 
 This guide lets you run the IBMS backend on your host machine with hot-reload
-speed — no Docker rebuild required. Only PostgreSQL runs in a container.
+speed — no Docker rebuild required. Only PostgreSQL runs in a container, and it is
+the **same** Postgres the full `docker-compose.yml` stack uses (one centralized dev
+database), so data is shared whether you run on the host or in Docker.
 
 ---
 
 ## Prerequisites
 
-- **JDK 21** (Eclipse Temurin recommended)
+- **JDK 25** — the Gradle build provisions it automatically via the foojay toolchain
+  resolver, so you don't need to install it by hand (first build downloads it).
 - **Docker** (for the Postgres container only)
 
 ---
@@ -16,15 +19,18 @@ speed — no Docker rebuild required. Only PostgreSQL runs in a container.
 
 ### 1. Start PostgreSQL
 
+Start just the `db` service from the main compose file (the app service stays down —
+you'll run it on the host):
+
 ```bash
-docker compose -f docker-compose.db.yml up -d
+docker compose up -d db
 ```
 
 Wait until the healthcheck passes:
 
 ```bash
-docker compose -f docker-compose.db.yml ps
-# STATUS should show "healthy"
+docker compose ps
+# db STATUS should show "healthy"
 ```
 
 ### 2. Run the backend
@@ -42,7 +48,7 @@ on first connection.
 ```bash
 # Stop the app: press Ctrl+C in the terminal running ./gradlew run
 # Stop Postgres (data preserved):
-docker compose -f docker-compose.db.yml down
+docker compose down
 ```
 
 ---
@@ -56,7 +62,7 @@ Key values and what they control:
 
 | Variable                | Default (in .env)                          | Notes                          |
 |-------------------------|--------------------------------------------|--------------------------------|
-| `DB_URL`               | `jdbc:postgresql://localhost:5433/ibms`    | Port 5433 avoids conflict with the main project's Postgres |
+| `DB_URL`               | `jdbc:postgresql://localhost:5432/ibms`    | Centralized dev Postgres from `docker-compose.yml` (shared with the Docker app) |
 | `BCRYPT_COST`          | `4`                                        | Low for dev speed; 12 in prod  |
 | `JWT_SECRET`           | `local-dev-secret-not-for-production`      | Never use outside localhost    |
 | `BOOTSTRAP_ADMIN_PASSWORD` | *(blank = auto-generated)*             | Logged once on first boot      |
@@ -69,8 +75,8 @@ Key values and what they control:
 To wipe all data and start fresh (migrations re-run automatically):
 
 ```bash
-docker compose -f docker-compose.db.yml down -v   # -v removes the volume
-docker compose -f docker-compose.db.yml up -d
+docker compose down -v   # -v removes the volume
+docker compose up -d db
 ./gradlew run
 ```
 
@@ -92,7 +98,7 @@ Alternatively, create a plain **Kotlin** run configuration targeting
 
 | Problem | Fix |
 |---------|-----|
-| `Connection refused` on port 5433 | Postgres isn't running — `docker compose -f docker-compose.db.yml up -d` |
+| `Connection refused` on port 5432 | Postgres isn't running — `docker compose up -d db` |
 | `FlywayException` on startup | DB may be in a bad state — reset with `down -v` then `up -d` |
 | Port 8082 already in use | Stop the conflicting process, or change the `args("-port=...")` in `build.gradle.kts` |
 | `.env` not loaded | Make sure you're running via `./gradlew run` (not `java -jar`) |
