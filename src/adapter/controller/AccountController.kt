@@ -50,7 +50,7 @@ fun Route.accountRoutes(
             call.ok(getAccount(call.pathId()))
         }
         post {
-            val caller = call.authorize(UserRole.SECRETARY, UserRole.PAYABLES)
+            val caller = call.authorize(UserRole.SECRETARY, UserRole.FINANCE)
             val req = call.receive<AccountUpsertRequest>()
             call.created(createAccount(req, caller.userId))
         }
@@ -66,7 +66,7 @@ fun Route.accountRoutes(
             call.ok(bulkImport(bytes, caller.userId), "bulk import completed")
         }
         put("/{id}") {
-            call.authorize(UserRole.SECRETARY, UserRole.PAYABLES)
+            call.authorize(UserRole.SECRETARY, UserRole.FINANCE)
             val req = call.receive<AccountUpsertRequest>()
             call.ok(updateAccount(call.pathId(), req))
         }

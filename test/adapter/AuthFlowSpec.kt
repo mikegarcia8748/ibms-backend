@@ -197,7 +197,7 @@ class AuthFlowSpec : BehaviorSpec({
                         header(HttpHeaders.Authorization, "Bearer $adminToken")
                         contentType(ContentType.Application.Json)
                         setBody(
-                            """{"username":"$resetUser","name":"Reset Me","role":"payables"}""",
+                            """{"username":"$resetUser","name":"Reset Me","role":"finance"}""",
                         )
                     }.bodyAsText().asJson().data()
                     val userId = provisioned["user"]!!.jsonObject.str("id")
