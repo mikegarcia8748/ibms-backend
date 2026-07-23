@@ -180,6 +180,21 @@ class CreateDraftTopSheetUseCaseSpec : BehaviorSpec({
         }
     }
 
+    Given("an existing open DRAFT for the same provider/period") {
+        every { providers.findById("p1") } returns provider
+        every { topsheets.list("p1", "2026-07", TopSheetStatus.DRAFT) } returns listOf(draftTopsheet)
+
+        When("creating another draft") {
+            Then("it is rejected with a Conflict instead of a raw 500 from the unique index") {
+                val err = shouldThrow<DomainError.Conflict> { useCase("p1", "2026-07", "compiler") }
+                err.message shouldBe "a draft already exists for this provider/period"
+                verify(exactly = 0) { batchSequences.nextValue(any()) }
+                verify(exactly = 0) { topsheets.createDraft(any(), any(), any(), any(), any(), any(), any()) }
+                verify(exactly = 0) { topsheets.addLine(any(), any()) }
+            }
+        }
+    }
+
     Given("an Idempotency-Key and two identical draft requests") {
         every { providers.findById("p1") } returns provider
         every { stores.list(null, null) } returns listOf(store118, store050)
