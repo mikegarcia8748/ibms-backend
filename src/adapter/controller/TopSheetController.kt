@@ -2,6 +2,7 @@ package com.puregoldbe.ibms.adapter.controller
 
 import com.puregoldbe.ibms.adapter.security.authorize
 import com.puregoldbe.ibms.application.usecase.ApproveTopSheetUseCase
+import com.puregoldbe.ibms.application.usecase.AssignRfpNumbersUseCase
 import com.puregoldbe.ibms.application.usecase.CompileTopSheetUseCase
 import com.puregoldbe.ibms.application.usecase.ConfirmTopSheetUseCase
 import com.puregoldbe.ibms.application.usecase.CreateDraftTopSheetUseCase
@@ -25,6 +26,7 @@ fun Route.topSheetRoutes(
     compile: CompileTopSheetUseCase,
     createDraft: CreateDraftTopSheetUseCase,
     updateLine: UpdateDraftLineUseCase,
+    assignRfp: AssignRfpNumbersUseCase,
     removeLine: RemoveDraftLineUseCase,
     confirmDraft: ConfirmTopSheetUseCase,
     list: ListTopSheetsUseCase,
@@ -73,6 +75,11 @@ fun Route.topSheetRoutes(
             val req = call.receive<UpdateLineRequest>()
             val lineId = call.parameters["lineId"]!!
             call.ok(updateLine(call.pathId(), lineId, req.rfpNumber, req.proratedAmount))
+        }
+        post("/{id}/assign-rfp") {
+            val caller = call.authorize(UserRole.SECRETARY)
+            val req = call.receive<AssignRfpNumbersRequest>()
+            call.ok(assignRfp(call.pathId(), req.startRfpNumber, req.endRfpNumber, caller.userId))
         }
         delete("/{id}/lines/{lineId}") {
             val caller = call.authorize(UserRole.SECRETARY)

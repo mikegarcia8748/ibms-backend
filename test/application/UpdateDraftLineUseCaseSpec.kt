@@ -82,6 +82,18 @@ class UpdateDraftLineUseCaseSpec : BehaviorSpec({
         }
     }
 
+    Given("a DRAFT topsheet and a PATCH with neither field provided") {
+        every { topsheets.findById("ts1") } returns draftTopsheet()
+
+        When("editing with both rfpNumber and proratedAmount null") {
+            Then("it is rejected with a Validation error instead of a silent no-op 200") {
+                shouldThrow<DomainError.Validation> { useCase("ts1", "l1", null, null) }
+                verify(exactly = 0) { topsheets.findLines(any()) }
+                verify(exactly = 0) { topsheets.updateLine(any(), any(), any()) }
+            }
+        }
+    }
+
     Given("a DRAFT topsheet and a non-numeric RFP number") {
         every { topsheets.findById("ts1") } returns draftTopsheet()
 

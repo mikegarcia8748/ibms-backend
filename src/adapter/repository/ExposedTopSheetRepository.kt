@@ -104,7 +104,12 @@ class ExposedTopSheetRepository : TopSheetRepository {
 
     override fun findLines(topsheetId: String): List<TopSheetDetail> {
         val uuid = topsheetId.toUuidOrNull() ?: return emptyList()
-        return TopSheetDetails.selectAll().where { TopSheetDetails.topsheetId eq uuid }.map { it.toDetail() }
+        // Contract order: rfpSortOrder ASC (== store branchCode DESC). Legacy one-shot
+        // compile lines have a null rfpSortOrder, so they sort last.
+        return TopSheetDetails.selectAll()
+            .where { TopSheetDetails.topsheetId eq uuid }
+            .orderBy(TopSheetDetails.rfpSortOrder to SortOrder.ASC_NULLS_LAST)
+            .map { it.toDetail() }
     }
 
     override fun billedAccountIds(billingPeriod: String): Set<String> =

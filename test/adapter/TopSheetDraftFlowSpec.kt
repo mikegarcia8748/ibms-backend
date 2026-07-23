@@ -117,27 +117,27 @@ class TopSheetDraftFlowSpec : BehaviorSpec({
                     batchNumber.endsWith("-B001") shouldBe true
                     val draftId = draftData.str("id")
 
-                    // 3. Lines — sorted by branchCode DESC, rfpSortOrder 1/2/3, null rfpNumber
+                    // 3. Lines — the server returns them already sorted by rfpSortOrder
+                    //    (branchCode DESC); no client-side re-sort. rfpSortOrder 1/2/3, null rfpNumber.
                     val linesResp = client.get("/topsheets/$draftId/lines") {
                         header(HttpHeaders.Authorization, "Bearer $token")
                     }
                     linesResp.status shouldBe HttpStatusCode.OK
-                    val rawLines = linesResp.bodyAsText().asJson().dataArr()
-                    rawLines.size shouldBe 3
-                    val sortedLines = rawLines.sortedBy { it.jsonObject.intOrNull("rfpSortOrder") ?: 0 }
-                    sortedLines[0].jsonObject.str("branchCode").startsWith("118") shouldBe true
-                    sortedLines[0].jsonObject.intOrNull("rfpSortOrder") shouldBe 1
-                    sortedLines[0].jsonObject["rfpNumber"] shouldBe JsonNull
-                    sortedLines[1].jsonObject.str("branchCode").startsWith("118") shouldBe true
-                    sortedLines[1].jsonObject.intOrNull("rfpSortOrder") shouldBe 2
-                    sortedLines[1].jsonObject["rfpNumber"] shouldBe JsonNull
-                    sortedLines[2].jsonObject.str("branchCode").startsWith("050") shouldBe true
-                    sortedLines[2].jsonObject.intOrNull("rfpSortOrder") shouldBe 3
-                    sortedLines[2].jsonObject["rfpNumber"] shouldBe JsonNull
+                    val serverLines = linesResp.bodyAsText().asJson().dataArr().map { it.jsonObject }
+                    serverLines.size shouldBe 3
+                    serverLines[0].str("branchCode").startsWith("118") shouldBe true
+                    serverLines[0].intOrNull("rfpSortOrder") shouldBe 1
+                    serverLines[0]["rfpNumber"] shouldBe JsonNull
+                    serverLines[1].str("branchCode").startsWith("118") shouldBe true
+                    serverLines[1].intOrNull("rfpSortOrder") shouldBe 2
+                    serverLines[1]["rfpNumber"] shouldBe JsonNull
+                    serverLines[2].str("branchCode").startsWith("050") shouldBe true
+                    serverLines[2].intOrNull("rfpSortOrder") shouldBe 3
+                    serverLines[2]["rfpNumber"] shouldBe JsonNull
 
-                    val line1Id = sortedLines[0].jsonObject.str("id")
-                    val line2Id = sortedLines[1].jsonObject.str("id")
-                    val line3Id = sortedLines[2].jsonObject.str("id")
+                    val line1Id = serverLines[0].str("id")
+                    val line2Id = serverLines[1].str("id")
+                    val line3Id = serverLines[2].str("id")
 
                     // 4. Patch RFP number on line 1 → 200
                     val patch1 = client.patch("/topsheets/$draftId/lines/$line1Id") {
@@ -345,6 +345,143 @@ class TopSheetDraftFlowSpec : BehaviorSpec({
                     }
                     second.status shouldBe HttpStatusCode.Created
                     second.bodyAsText().asJson().data().str("id") shouldBe firstId
+                }
+            }
+        }
+    }
+
+    Given("an existing DRAFT and a second draft attempt without an Idempotency-Key") {
+        When("POSTing /topsheets/draft again for the same provider/period") {
+            Then("it is rejected with 409 (not a raw 500 from the unique index)") {
+                testApplication {
+                    application { testModule() }
+
+                    val token = signIn(UserRole.SYSADMIN).token
+                    val s = System.nanoTime().toString()
+
+                    val providerId = client.post("/providers") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                        contentType(ContentType.Application.Json)
+                        setBody("""{"name":"DupProv-$s","paymentScheduleDay":5}""")
+                    }.bodyAsText().asJson().data().str("id")
+
+                    val attachmentId = client.post("/attachments/presign/upload") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                        contentType(ContentType.Application.Json)
+                        setBody("""{"fileName":"p.txt","contentType":"text/plain","purpose":"installation_proof"}""")
+                    }.bodyAsText().asJson().data().str("attachmentId")
+
+                    val storeId = client.post("/stores") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                        contentType(ContentType.Application.Json)
+                        setBody(
+                            """{"storeType":"puregold","branchCode":"DP-$s","name":"Dup Store","proofOfInstallationId":"$attachmentId"}""",
+                        )
+                    }.bodyAsText().asJson().data().str("id")
+
+                    client.post("/accounts") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                        contentType(ContentType.Application.Json)
+                        setBody(
+                            """{"accountNumber":"dp-$s-1","providerId":"$providerId","storeId":"$storeId","rate":"1000","installationDate":"2020-01-01"}""",
+                        )
+                    }.status shouldBe HttpStatusCode.Created
+
+                    val body = """{"providerId":"$providerId","billingPeriod":"$currentPeriod"}"""
+
+                    client.post("/topsheets/draft") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                        contentType(ContentType.Application.Json)
+                        setBody(body)
+                    }.status shouldBe HttpStatusCode.Created
+
+                    val second = client.post("/topsheets/draft") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                        contentType(ContentType.Application.Json)
+                        setBody(body)
+                    }
+                    second.status shouldBe HttpStatusCode.Conflict
+                    second.bodyAsText().asJson().str("message") shouldBe
+                        "a draft already exists for this provider/period"
+                }
+            }
+        }
+    }
+
+    Given("a DRAFT topsheet with two stores, one shared by two accounts") {
+        When("bulk-assigning an RFP range via /assign-rfp") {
+            Then("the highest store code claims startRfpNumber and shared codes share a number") {
+                testApplication {
+                    application { testModule() }
+
+                    val token = signIn(UserRole.SYSADMIN).token
+                    val s = System.nanoTime().toString()
+
+                    val providerId = client.post("/providers") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                        contentType(ContentType.Application.Json)
+                        setBody("""{"name":"RfpProv-$s","paymentScheduleDay":15}""")
+                    }.bodyAsText().asJson().data().str("id")
+
+                    val attachmentId = client.post("/attachments/presign/upload") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                        contentType(ContentType.Application.Json)
+                        setBody("""{"fileName":"p.txt","contentType":"text/plain","purpose":"installation_proof"}""")
+                    }.bodyAsText().asJson().data().str("attachmentId")
+
+                    suspend fun createStore(code: String) = client.post("/stores") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                        contentType(ContentType.Application.Json)
+                        setBody(
+                            """{"storeType":"puregold","branchCode":"$code","name":"Store $code","proofOfInstallationId":"$attachmentId"}""",
+                        )
+                    }.bodyAsText().asJson().data().str("id")
+
+                    // "220…" sorts above "210…" lexicographically, so 220 is the top (highest) code.
+                    val storeHigh = createStore("220-$s")
+                    val storeLow = createStore("210-$s")
+
+                    suspend fun createAccount(num: String, storeId: String) = client.post("/accounts") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                        contentType(ContentType.Application.Json)
+                        setBody(
+                            """{"accountNumber":"$num","providerId":"$providerId","storeId":"$storeId","rate":"1000","installationDate":"2020-01-01"}""",
+                        )
+                    }
+                    createAccount("r-$s-1", storeHigh)
+                    createAccount("r-$s-2", storeHigh)
+                    createAccount("r-$s-3", storeLow)
+
+                    val draftId = client.post("/topsheets/draft") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                        contentType(ContentType.Application.Json)
+                        setBody("""{"providerId":"$providerId","billingPeriod":"$currentPeriod"}""")
+                    }.bodyAsText().asJson().data().str("id")
+
+                    // Range covers 3 numbers but there are only 2 distinct store codes -> 400.
+                    val mismatch = client.post("/topsheets/$draftId/assign-rfp") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                        contentType(ContentType.Application.Json)
+                        setBody("""{"startRfpNumber":"0100021","endRfpNumber":"0100023"}""")
+                    }
+                    mismatch.status shouldBe HttpStatusCode.BadRequest
+
+                    // Correct range: 2 numbers for 2 distinct store codes.
+                    val assign = client.post("/topsheets/$draftId/assign-rfp") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                        contentType(ContentType.Application.Json)
+                        setBody("""{"startRfpNumber":"0100021","endRfpNumber":"0100022"}""")
+                    }
+                    assign.status shouldBe HttpStatusCode.OK
+                    val assigned = assign.bodyAsText().asJson().dataArr().map { it.jsonObject }
+                    assigned.size shouldBe 3
+                    // Display order (rfpSortOrder): the two 220 accounts first (sharing 0100021), then 210.
+                    assigned[0].str("branchCode").startsWith("220") shouldBe true
+                    assigned[0].str("rfpNumber") shouldBe "0100021"
+                    assigned[1].str("branchCode").startsWith("220") shouldBe true
+                    assigned[1].str("rfpNumber") shouldBe "0100021"
+                    assigned[2].str("branchCode").startsWith("210") shouldBe true
+                    assigned[2].str("rfpNumber") shouldBe "0100022"
                 }
             }
         }
