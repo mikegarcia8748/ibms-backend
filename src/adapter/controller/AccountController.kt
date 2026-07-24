@@ -2,6 +2,7 @@ package com.puregoldbe.ibms.adapter.controller
 
 import com.puregoldbe.ibms.adapter.security.authorize
 import com.puregoldbe.ibms.application.usecase.BulkImportAccountsUseCase
+import com.puregoldbe.ibms.application.usecase.CancelDeactivationUseCase
 import com.puregoldbe.ibms.application.usecase.CreateAccountUseCase
 import com.puregoldbe.ibms.application.usecase.DeactivateAccountUseCase
 import com.puregoldbe.ibms.application.usecase.GetAccountUseCase
@@ -10,6 +11,7 @@ import com.puregoldbe.ibms.application.usecase.TransferAccountUseCase
 import com.puregoldbe.ibms.application.usecase.UpdateAccountUseCase
 import com.puregoldbe.ibms.domain.error.DomainError
 import com.puregoldbe.ibms.domain.model.AccountUpsertRequest
+import com.puregoldbe.ibms.domain.model.CancelDeactivationRequest
 import com.puregoldbe.ibms.domain.model.DeactivateAccountRequest
 import com.puregoldbe.ibms.domain.model.TransferAccountRequest
 import com.puregoldbe.ibms.domain.model.UserRole
@@ -21,6 +23,8 @@ import io.ktor.server.routing.*
 import io.ktor.utils.io.*
 import io.ktor.utils.io.core.*
 import kotlinx.io.readByteArray
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 fun Route.accountRoutes(
     listAccounts: ListAccountsUseCase,
@@ -29,6 +33,7 @@ fun Route.accountRoutes(
     updateAccount: UpdateAccountUseCase,
     transferAccount: TransferAccountUseCase,
     deactivateAccount: DeactivateAccountUseCase,
+    cancelDeactivation: CancelDeactivationUseCase,
     bulkImport: BulkImportAccountsUseCase,
 ) {
     route("/accounts") {
@@ -78,7 +83,13 @@ fun Route.accountRoutes(
         post("/{id}/deactivate") {
             val caller = call.authorize(UserRole.SECRETARY)
             val req = call.receive<DeactivateAccountRequest>()
-            call.ok(deactivateAccount(call.pathId(), req.proofId, caller.userId))
+            val idem = call.idempotencyContext(caller.userId, Json.encodeToString(req))
+            call.ok(deactivateAccount(call.pathId(), req.proofId, caller.userId, idem))
+        }
+        post("/{id}/cancel-deactivation") {
+            val caller = call.authorize(UserRole.SECRETARY)
+            val req = call.receive<CancelDeactivationRequest>()
+            call.ok(cancelDeactivation(call.pathId(), req.reason, caller.userId))
         }
     }
 }

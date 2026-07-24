@@ -33,25 +33,25 @@ class ExpireGracePeriodAccountsUseCaseSpec : BehaviorSpec({
     Given("one account past grace and one still within it") {
         // requested 2026-06-25 -> grace ends 2026-07-25 (< now 2026-08-01): expired
         val expired = terminationRequested("exp", Instant.parse("2026-06-25T00:00:00Z"))
-        // requested 2026-07-20 -> grace ends 2026-08-19 (> now): still active
-        val within = terminationRequested("within", Instant.parse("2026-07-20T00:00:00Z"))
-        every { accounts.list(null, null, AccountStatus.TERMINATION_REQUESTED) } returns listOf(expired, within)
+        // The DB-side findExpiredGrace only returns accounts past their grace period
+        every { accounts.findExpiredGrace(any()) } returns listOf(expired)
 
         When("running the job") {
             val count = useCase()
             Then("only the expired account is moved to inactive") {
                 count shouldBe 1
+                verify(exactly = 1) { accounts.findExpiredGrace(any()) }
                 verify(exactly = 1) { accounts.updateStatus("exp", AccountStatus.INACTIVE) }
-                verify(exactly = 0) { accounts.updateStatus("within", any()) }
             }
         }
     }
 
     Given("no accounts awaiting termination") {
-        every { accounts.list(null, null, AccountStatus.TERMINATION_REQUESTED) } returns emptyList()
+        every { accounts.findExpiredGrace(any()) } returns emptyList()
         When("running the job") {
             Then("nothing is expired") {
                 useCase() shouldBe 0
+                verify(exactly = 1) { accounts.findExpiredGrace(any()) }
             }
         }
     }

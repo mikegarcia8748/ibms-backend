@@ -10,10 +10,10 @@ rule, states **what** the rule is, **where** it is enforced in the codebase, and
 Rules are documented factually based on what the code actually does. Where a rule is
 **not** currently enforced (a known gap), it is explicitly marked `NOT ENFORCED`.
 
-> **Scope note:** This document covers the `account-change-requests` worktree, which
-> adds the Account Change Requests module on top of the base IBMS backend. The Bulk
-> Import module is documented from the main repository for completeness, as that use
-> case is not present in this worktree.
+> **Scope note:** This document covers the `deactivation-apis` worktree, which
+> adds the Account Deactivation APIs (cancel-deactivation, idempotent deactivation)
+> on top of the base IBMS backend. The Bulk Import module is documented from the main
+> repository for completeness, as that use case is not present in this worktree.
 
 ---
 
@@ -24,7 +24,7 @@ Rules are documented factually based on what the code actually does. Where a rul
 | Role | Wire value | Description |
 |------|-----------|-------------|
 | `SYSADMIN` | `sysadmin` | Global superuser — admitted to every endpoint regardless of the per-route allow-list. |
-| `SECRETARY` | `secretary` | Store/account CRUD, transfers, deactivation, topsheet compile/preview, OCR extraction, change-request submission/cancellation. |
+| `SECRETARY` | `secretary` | Store/account CRUD, transfers, deactivation, cancel-deactivation, topsheet compile/preview, OCR extraction, change-request submission/cancellation. |
 | `PAYABLES` | `payables` | Account create/update (shares the account write path with Secretary). |
 | `FINANCE` | `finance` | TopSheet approval, payment, and Excel export. |
 | `MANAGER` | `manager` | Approve/reject account change requests. |
@@ -70,6 +70,7 @@ Rules are documented factually based on what the code actually does. Where a rul
 | `PUT /accounts/{id}` | `SECRETARY`, `PAYABLES` |
 | `POST /accounts/{id}/transfer` | `SECRETARY` |
 | `POST /accounts/{id}/deactivate` | `SECRETARY` |
+| `POST /accounts/{id}/cancel-deactivation` | `SECRETARY` |
 | `POST /accounts/{id}/change-requests` | `SECRETARY` |
 | `GET /accounts/{id}/change-requests` | Any authenticated |
 | `GET /accounts/{id}/change-requests/{requestId}` | Any authenticated |
@@ -393,9 +394,10 @@ Rules are documented factually based on what the code actually does. Where a rul
 ```
 ACTIVE ──(deactivate)──→ TERMINATION_REQUESTED ──(grace expiry)──→ INACTIVE
 ACTIVE ──(transfer)──→ TRANSFERRED  (+ new ACTIVE account created)
-
-TERMINATED: enum value exists but no use case currently sets this status.
+TERMINATION_REQUESTED ──(cancel-deactivation)──→ ACTIVE
 ```
+
+Valid account statuses: `ACTIVE`, `TERMINATION_REQUESTED`, `TRANSFERRED`, `INACTIVE`.
 
 - **Rule:** `ACTIVE → TERMINATION_REQUESTED`: requests deactivation via `POST /accounts/{id}/deactivate`. Requires `SECRETARY` role, a valid `proofId`, and sets `terminationRequestedAt` to the current time.
   - **Enforcement point:** `DeactivateAccountUseCase` in `AccountLifecycleUseCases.kt` — calls `accounts.markTerminationRequested()`.
@@ -406,8 +408,25 @@ TERMINATED: enum value exists but no use case currently sets this status.
 - **Rule:** `ACTIVE → TRANSFERRED`: occurs via the transfer endpoint. The old account is marked `TRANSFERRED` and a new `ACTIVE` account is created at the new store.
   - **Enforcement point:** `TransferAccountUseCase` in `AccountLifecycleUseCases.kt`.
 
-- **Rule (NOT ENFORCED):** The `TERMINATED` status exists in the enum and DB type but no code path sets it. Accounts that complete the grace period go to `INACTIVE`, not `TERMINATED`.
-  - **Impact:** `TERMINATED` is effectively dead code / reserved for future use.
+- **Rule:** `TERMINATION_REQUESTED → ACTIVE`: cancels a pending deactivation via `POST /accounts/{id}/cancel-deactivation`. Requires `SECRETARY` role and a mandatory textual `reason`.
+  - **Enforcement point:** `CancelDeactivationUseCase` in `AccountLifecycleUseCases.kt` — reverts status to `ACTIVE` and clears `terminationRequestedAt`.
+
+### Deactivation Rules
+
+- **Rule:** Only `ACTIVE` accounts may be deactivated (status validation enforced).
+  - **Enforcement point:** `DeactivateAccountUseCase` — `if (account.status != AccountStatus.ACTIVE) throw Conflict`.
+
+- **Rule:** Deactivation proof attachment is linked to the account (auditable).
+  - **Enforcement point:** `DeactivateAccountUseCase` — links proof via `accounts.markTerminationRequested()` with `proofId`.
+
+- **Rule:** Deactivation supports `Idempotency-Key` header for safe retries.
+  - **Enforcement point:** `DeactivateAccountUseCase` — uses `idempotent()` wrapper.
+
+- **Rule:** Cancel deactivation reverts `TERMINATION_REQUESTED → ACTIVE` with a mandatory textual reason.
+  - **Enforcement point:** `CancelDeactivationUseCase` — `if (reason.isBlank()) throw Validation`; reverts status and records reason in activity log.
+
+- **Rule:** Account Change Requests are blocked for accounts in `TERMINATION_REQUESTED` status.
+  - **Enforcement point:** `SubmitAccountChangeRequestUseCase` — `if (account.status != AccountStatus.ACTIVE) throw Conflict`.
 
 ### Required vs Optional Fields
 
@@ -432,7 +451,7 @@ TERMINATED: enum value exists but no use case currently sets this status.
 
 ### Uniqueness Constraints
 
-- **Rule:** `(provider_id, account_number)` is unique among **live** accounts only — i.e., accounts whose status is not `transferred` or `terminated`.
+- **Rule:** `(provider_id, account_number)` is unique among **live** accounts only — i.e., accounts whose status is not `transferred` or `inactive`.
   - **Enforcement point:** DB partial unique index `uq_account_number_per_provider_active` (V4 migration); use-case check `accounts.existsByProviderAndNumber()` in `CreateAccountUseCase`.
   - **Rationale:** A transferred account and its active successor can share the same `(provider_id, account_number)` because the old one is marked `TRANSFERRED`.
 
@@ -455,7 +474,7 @@ TERMINATED: enum value exists but no use case currently sets this status.
 
 - **Rule:** A change request can only be submitted for an account whose status is `ACTIVE`.
   - **Enforcement point:** `SubmitAccountChangeRequestUseCase` in `AccountChangeRequestUseCases.kt` — `if (account.status != AccountStatus.ACTIVE) throw Conflict`.
-  - **Rationale:** Changes to terminated/transferred/inactive accounts are not meaningful.
+  - **Rationale:** Changes to accounts in `TERMINATION_REQUESTED`, `TRANSFERRED`, or `INACTIVE` status are not meaningful. Accounts pending deactivation must cancel deactivation first.
 
 - **Rule:** At least one field must be changed — submitting an empty request (all fields null) is rejected.
   - **Enforcement point:** `SubmitAccountChangeRequestUseCase` — checks all input fields for null.
@@ -658,8 +677,8 @@ All transitions are one-way; no reversal endpoints exist.
 - **Rule:** If `terminationRequestedAt` is set and the grace-end date's period is before the billing period, the account is excluded (fully terminated).
   - **Enforcement point:** `ProrationEngine.isEligible()` — `if (periodOf(termDate) < billingPeriod) return false`.
 
-- **Rule:** If no termination was requested and the account status is `INACTIVE` or `TERMINATED`, the account is excluded.
-  - **Enforcement point:** `ProrationEngine.isEligible()` — `else if (account.status == INACTIVE || account.status == TERMINATED) return false`.
+- **Rule:** If no termination was requested and the account status is `INACTIVE`, the account is excluded.
+  - **Enforcement point:** `ProrationEngine.isEligible()` — `else if (account.status == INACTIVE) return false`.
   - **Note:** `TERMINATION_REQUESTED` accounts **are** eligible (they are still in the grace window and billable).
 
 - **Rule:** An account already billed in the same billing period is excluded.
@@ -741,6 +760,14 @@ All transitions are one-way; no reversal endpoints exist.
 - **Rule:** The grace period has expired when `now >= graceEnd`.
   - **Enforcement point:** `GracePeriodPolicy.hasExpired()`.
 
+- **Rule:** `graceEndDate` is computed server-side and included in all Account API responses when the account status is `termination_requested`.
+  - **Enforcement point:** Account serialization in controller/DTO layer — computed from `terminationRequestedAt + 30 days`.
+  - **Rationale:** Clients do not need to recompute the grace-end date; it is authoritative from the server.
+
+- **Rule:** Accounts can be cancelled (reverted to `ACTIVE`) at any point during the 30-day grace period via `POST /accounts/{id}/cancel-deactivation`.
+  - **Enforcement point:** `CancelDeactivationUseCase` in `AccountLifecycleUseCases.kt` — only accounts with status `TERMINATION_REQUESTED` can be cancelled.
+  - **Rationale:** Business may reverse a deactivation decision before the grace window closes.
+
 ### Automatic Expiry Job
 
 - **Rule:** The `ExpireGracePeriodAccountsUseCase` finds all `TERMINATION_REQUESTED` accounts whose grace has expired and flips them to `INACTIVE`.
@@ -759,7 +786,7 @@ All transitions are one-way; no reversal endpoints exist.
 ### Status Transitions During Grace
 
 - **Rule:** During the grace window, the account remains `TERMINATION_REQUESTED` and is still billable (proration bills up to the grace-end day).
-  - **Enforcement point:** `ProrationEngine.isEligible()` — `TERMINATION_REQUESTED` accounts are **not** excluded (only `INACTIVE` and `TERMINATED` without a termination request are).
+  - **Enforcement point:** `ProrationEngine.isEligible()` — `TERMINATION_REQUESTED` accounts are **not** excluded (only `INACTIVE` accounts without a termination request are).
 
 - **Rule:** After the grace window expires, the account becomes `INACTIVE` and is no longer eligible for billing.
   - **Enforcement point:** `ExpireGracePeriodAccountsUseCase` + `ProrationEngine.isEligible()`.
@@ -825,7 +852,7 @@ All transitions are one-way; no reversal endpoints exist.
 
 ## Module: Bulk Import
 
-> **Note:** `BulkImportAccountsUseCase.kt` is not present in the `account-change-requests`
+> **Note:** `BulkImportAccountsUseCase.kt` is not present in the `deactivation-apis`
 > worktree. The rules below are documented from the main repository
 > (`/Users/puregoldmobileteam/IdeaProjects/ibms-backend/src/application/usecase/BulkImportAccountsUseCase.kt`)
 > for completeness and alignment.
@@ -899,6 +926,7 @@ The following actions are recorded in the activity log:
 | `account.created` | Account created | `CreateAccountUseCase` |
 | `account.transferred` | Account transferred | `TransferAccountUseCase` |
 | `account.deactivation_requested` | Deactivation requested | `DeactivateAccountUseCase` |
+| `account.deactivation_cancelled` | Deactivation cancelled, account reverted to active | `CancelDeactivationUseCase` |
 | `account.bulk_imported` | Account created via bulk import | `BulkImportAccountsUseCase` |
 | `store.created` | Store created | `CreateStoreUseCase` |
 | `topsheet.compiled` | TopSheet compiled | `CompileTopSheetUseCase` |

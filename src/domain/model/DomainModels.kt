@@ -66,7 +66,6 @@ enum class ProviderStatus {
 enum class AccountStatus {
     @SerialName("active")                ACTIVE,
     @SerialName("termination_requested") TERMINATION_REQUESTED,
-    @SerialName("terminated")            TERMINATED,
     @SerialName("transferred")           TRANSFERRED,
     @SerialName("inactive")              INACTIVE,
 }
@@ -168,6 +167,7 @@ data class Account(
     val isProrated: Boolean = false,
     val status: AccountStatus = AccountStatus.ACTIVE,
     val terminationRequestedAt: Instant? = null,
+    val graceEndDate: Instant? = null,
     val subscriptionProofIds: List<String> = emptyList(),
     val createdAt: Instant,
     val updatedAt: Instant? = null,
@@ -595,3 +595,6 @@ data class AccountChangeRequestWithDiff(
     val request: AccountChangeRequest,
     val diff: List<FieldDiff>,
 )
+
+@Serializable
+data class CancelDeactivationRequest(val reason: String)
