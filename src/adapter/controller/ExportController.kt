@@ -42,6 +42,16 @@ fun Route.exportRoutes(
         call.respondBytes(file.bytes, ContentType.parse("application/pdf"))
     }
 
+    get("/exports/topsheet/{id}.pdf") {
+        call.authorize(UserRole.SECRETARY, UserRole.FINANCE)
+        val file = exportTopSheetPdf(call.pathId())
+        call.response.header(
+            HttpHeaders.ContentDisposition,
+            ContentDisposition.Attachment.withParameter(ContentDisposition.Parameters.FileName, file.fileName).toString(),
+        )
+        call.respondBytes(file.bytes, ContentType.parse("application/pdf"))
+    }
+
     get("/exports/accounts.xlsx") {
         call.authorize()
         val file = exportAccounts(
