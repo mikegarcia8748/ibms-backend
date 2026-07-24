@@ -595,3 +595,28 @@ data class AccountChangeRequestWithDiff(
     val request: AccountChangeRequest,
     val diff: List<FieldDiff>,
 )
+
+// =====================================================================
+//  Account export (denormalized row for Excel generation)
+// =====================================================================
+/**
+ * A denormalized account row carrying store/provider names for the Excel export.
+ * Joins Accounts + Stores + Providers so the spreadsheet shows human-readable
+ * labels instead of UUIDs.
+ */
+@Serializable
+data class AccountExportRow(
+    val accountNumber: String,
+    val circuitId: String?,
+    val providerName: String,
+    val branchCode: String,
+    val storeName: String,
+    val planName: String?,
+    val serviceType: String?,
+    val speed: String?,
+    val rate: Money,
+    val installationDate: LocalDate,
+    val contractStartDate: LocalDate?,
+    val contractEndDate: LocalDate?,
+    val status: AccountStatus,
+)
