@@ -4,6 +4,7 @@ import com.puregoldbe.ibms.adapter.security.authorize
 import com.puregoldbe.ibms.application.usecase.BulkImportAccountsUseCase
 import com.puregoldbe.ibms.application.usecase.CancelDeactivationUseCase
 import com.puregoldbe.ibms.application.usecase.CreateAccountUseCase
+import com.puregoldbe.ibms.application.usecase.CreateISPAccountUseCase
 import com.puregoldbe.ibms.application.usecase.DeactivateAccountUseCase
 import com.puregoldbe.ibms.application.usecase.GetAccountUseCase
 import com.puregoldbe.ibms.application.usecase.ListAccountsUseCase
@@ -12,6 +13,7 @@ import com.puregoldbe.ibms.application.usecase.UpdateAccountUseCase
 import com.puregoldbe.ibms.domain.error.DomainError
 import com.puregoldbe.ibms.domain.model.AccountUpsertRequest
 import com.puregoldbe.ibms.domain.model.CancelDeactivationRequest
+import com.puregoldbe.ibms.domain.model.CreateISPAccountInput
 import com.puregoldbe.ibms.domain.model.DeactivateAccountRequest
 import com.puregoldbe.ibms.domain.model.TransferAccountRequest
 import com.puregoldbe.ibms.domain.model.UserRole
@@ -35,6 +37,7 @@ fun Route.accountRoutes(
     deactivateAccount: DeactivateAccountUseCase,
     cancelDeactivation: CancelDeactivationUseCase,
     bulkImport: BulkImportAccountsUseCase,
+    createISPAccount: CreateISPAccountUseCase,
 ) {
     route("/accounts") {
         get {
@@ -58,6 +61,11 @@ fun Route.accountRoutes(
             val caller = call.authorize(UserRole.SECRETARY, UserRole.FINANCE)
             val req = call.receive<AccountUpsertRequest>()
             call.created(createAccount(req, caller.userId))
+        }
+        post("/isp") {
+            val caller = call.authorize(UserRole.SECRETARY, UserRole.FINANCE)
+            val req = call.receive<CreateISPAccountInput>()
+            call.created(createISPAccount(req, caller.userId))
         }
         post("/bulk-import") {
             val caller = call.authorize(UserRole.SYSADMIN)

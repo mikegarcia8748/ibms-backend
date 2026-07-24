@@ -133,6 +133,9 @@ interface AccountRepository {
     /** Active accounts whose store is closed/inactive (the global floating view). */
     fun listFloating(): List<Account>
 
+    /** Denormalized accounts joined with store/provider names for the Excel export. */
+    fun listForExport(providerId: String?, status: AccountStatus?): List<AccountExportRow>
+
     fun updateStatus(id: String, status: AccountStatus): Account?
 
     /** Start the 30-day grace window: status -> termination_requested, timestamp set. */

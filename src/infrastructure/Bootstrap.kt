@@ -50,6 +50,11 @@ fun Application.moduleWith(cfg: AppConfig) {
     val dataSource = buildDataSource(cfg.db)
     migrate(dataSource)
     val db = connectExposed(dataSource)
+    // Release the connection pool on shutdown. In production this is graceful-shutdown
+    // hygiene; in the integration suite it matters more — each `testApplication` boots a
+    // fresh app instance, and without this the pools leak and eventually exhaust Postgres
+    // ("FATAL: sorry, too many clients already").
+    monitor.subscribe(ApplicationStopped) { (dataSource as? AutoCloseable)?.close() }
 
     // --- Adapters (ports -> implementations) ---
     val tx = ExposedTransactionRunner(db)
@@ -108,6 +113,7 @@ fun Application.moduleWith(cfg: AppConfig) {
     val listAccounts = ListAccountsUseCase(accounts, tx)
     val getAccount = GetAccountUseCase(accounts, tx)
     val createAccount = CreateAccountUseCase(accounts, providers, stores, activities, tx)
+    val createISPAccount = CreateISPAccountUseCase(createAccount, providers, attachments, clock, tx)
     val updateAccount = UpdateAccountUseCase(accounts, providers, stores, tx)
     val transferAccount = TransferAccountUseCase(accounts, stores, transfers, attachments, idempotency, activities, clock, tx)
     val listTransfers = ListTransfersUseCase(transfers, tx)
@@ -127,9 +133,11 @@ fun Application.moduleWith(cfg: AppConfig) {
     val payTopSheet = PayTopSheetUseCase(topsheets, idempotency, clock, tx)
     val createDraftTopSheet = CreateDraftTopSheetUseCase(accounts, stores, providers, topsheets, batchSequences, sequences, idempotency, activities, clock, tx)
     val updateDraftLine = UpdateDraftLineUseCase(topsheets, tx)
+    val assignRfpNumbers = AssignRfpNumbersUseCase(topsheets, activities, tx)
     val removeDraftLine = RemoveDraftLineUseCase(topsheets, activities, tx)
     val confirmTopSheet = ConfirmTopSheetUseCase(accounts, stores, topsheets, sequences, idempotency, activities, clock, tx)
     val exportTopSheet = ExportTopSheetExcelUseCase(topsheets, tx)
+    val exportAccounts = ExportAccountsExcelUseCase(accounts, providers, tx)
     val expireGrace = ExpireGracePeriodAccountsUseCase(accounts, clock, tx)
     val listActivities = ListActivitiesUseCase(activities, tx)
     val triggerOcr = TriggerOcrExtractionUseCase(ocrBatches, ocrGateway, tx)
@@ -177,17 +185,17 @@ fun Application.moduleWith(cfg: AppConfig) {
             userRoutes(getCurrentUser, listUsers, provisionUser, resetUserPassword, updateUserRole, updateUserStatus)
             providerRoutes(listProviders, createProvider, updateProvider, deactivateProvider)
             storeRoutes(listStores, getStore, createStore, updateStore, closeStore, getFloating)
-            accountRoutes(listAccounts, getAccount, createAccount, updateAccount, transferAccount, deactivateAccount, cancelDeactivation, bulkImport)
+            accountRoutes(listAccounts, getAccount, createAccount, updateAccount, transferAccount, deactivateAccount, cancelDeactivation, bulkImport, createISPAccount)
             accountChangeRequestRoutes(submitChangeRequest, approveChangeRequest, rejectChangeRequest, cancelChangeRequest, getChangeRequestWithDiff, listChangeRequests)
             transferRoutes(listTransfers, transferAccount)
             activityRoutes(listActivities)
             ocrRoutes(triggerOcr, listOcrBatches, getOcrBatchRows, listOcrTemplates, createOcrTemplate, updateOcrTemplate)
             topSheetRoutes(
                 previewCompilation, compileTopSheet, createDraftTopSheet, updateDraftLine,
-                removeDraftLine, confirmTopSheet, listTopSheets, getTopSheet,
+                assignRfpNumbers, removeDraftLine, confirmTopSheet, listTopSheets, getTopSheet,
                 getTopSheetDetails, approveTopSheet, payTopSheet,
             )
-            exportRoutes(exportTopSheet)
+            exportRoutes(exportTopSheet, exportAccounts)
             attachmentRoutes(presignUpload, presignDownload)
             jobRoutes(expireGrace)
         }

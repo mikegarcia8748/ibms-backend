@@ -39,3 +39,14 @@ data class UpdateLineRequest(
     val rfpNumber: String? = null,
     val proratedAmount: String? = null,
 )
+
+/**
+ * Body for POST /topsheets/{id}/assign-rfp — bulk-assign a contiguous RFP number
+ * range across a draft's lines, sorted by store code. [endRfpNumber] is a safety
+ * check: the range must cover exactly as many numbers as there are store codes.
+ */
+@Serializable
+data class AssignRfpNumbersRequest(
+    val startRfpNumber: String,
+    val endRfpNumber: String,
+)

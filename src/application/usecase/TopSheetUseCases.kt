@@ -30,6 +30,7 @@ import com.puregoldbe.ibms.domain.valueobject.toMoneyString
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import java.math.BigDecimal
+import java.math.BigInteger
 
 /** Eligible account + its store + computed proration, shared by preview and compile. */
 internal data class EligibleLine(
@@ -355,6 +356,12 @@ class CreateDraftTopSheetUseCase(
             requireNotFuturePeriod(billingPeriod, clock)
             val provider = providers.findById(providerId)
                 ?: throw DomainError.NotFound("provider $providerId not found")
+            // One open DRAFT per provider/period (also enforced by the uq_draft_per_provider_period
+            // partial index). Surface it as a clean 409 rather than letting the index throw a raw
+            // 500. A same-key idempotent retry never reaches here — it replays the stored 201.
+            if (topsheets.list(providerId, billingPeriod, TopSheetStatus.DRAFT).isNotEmpty()) {
+                throw DomainError.Conflict("a draft already exists for this provider/period", "draft_exists")
+            }
             val billed = topsheets.billedAccountIds(billingPeriod)
             val settled = topsheets.billedPeriodsByAccount(providerId)
             val storesById = stores.list(null, null).associateBy { it.id }
@@ -423,6 +430,9 @@ class UpdateDraftLineUseCase(
         if (ts.status != TopSheetStatus.DRAFT) {
             throw DomainError.Conflict("only draft topsheets can be edited (was ${ts.status.name.lowercase()})")
         }
+        if (rfpNumber == null && proratedAmount == null) {
+            throw DomainError.Validation("at least one of rfpNumber or proratedAmount must be provided")
+        }
         if (rfpNumber != null && !rfpNumber.matches(Regex("^\\d+$"))) {
             throw DomainError.Validation("rfpNumber must be numeric only")
         }
@@ -443,6 +453,76 @@ class UpdateDraftLineUseCase(
             ?: throw DomainError.NotFound("line $lineId not found")
         topsheets.updateLine(lineId, rfpNumber, proratedAmount)
             ?: throw DomainError.NotFound("line $lineId not found")
+    }
+}
+
+/**
+ * Bulk-assign RFP numbers across a DRAFT topsheet's lines. Store codes
+ * ([TopSheetDetail.branchCode]) are numbered in display order — descending, so the top
+ * line (highest branch code, matching GET /lines / rfpSortOrder) gets [startRfpNumber]
+ * and the numbers grow downward. A sequential RFP number is minted per distinct store
+ * code, so every account sharing a store code receives the same RFP number. Storeless
+ * lines (null branchCode) are skipped — their RFP stays null for a manual PATCH.
+ * [endRfpNumber] is a safety check: the range must cover exactly as many numbers as
+ * there are distinct (non-null) store codes. The lines are returned in display order for
+ * the Secretary to review before confirming.
+ */
+class AssignRfpNumbersUseCase(
+    private val topsheets: TopSheetRepository,
+    private val activity: ActivityRecorder,
+    private val tx: TransactionRunner,
+) {
+    private val numeric = Regex("^\\d+$")
+
+    suspend operator fun invoke(
+        topsheetId: String,
+        startRfpNumber: String,
+        endRfpNumber: String,
+        callerId: String,
+    ): List<TopSheetDetail> = tx.inTransaction {
+        val ts = topsheets.findById(topsheetId)
+            ?: throw DomainError.NotFound("topsheet $topsheetId not found")
+        if (ts.status != TopSheetStatus.DRAFT) {
+            throw DomainError.Conflict("only draft topsheets can be edited (was ${ts.status.name.lowercase()})")
+        }
+        if (!startRfpNumber.matches(numeric)) {
+            throw DomainError.Validation("startRfpNumber must be numeric only")
+        }
+        if (!endRfpNumber.matches(numeric)) {
+            throw DomainError.Validation("endRfpNumber must be numeric only")
+        }
+        val start = startRfpNumber.toBigInteger()
+        val end = endRfpNumber.toBigInteger()
+        if (end < start) {
+            throw DomainError.Validation("endRfpNumber must be greater than or equal to startRfpNumber")
+        }
+        val lines = topsheets.findLines(topsheetId)
+        if (lines.isEmpty()) {
+            throw DomainError.Conflict("draft topsheet $topsheetId has no lines to number", "nothing_to_compile")
+        }
+        // Number in display order: store code DESCENDING so the top line (highest branch
+        // code, matching GET /lines / rfpSortOrder order) claims [startRfpNumber] and the
+        // numbers grow downward. Storeless lines (null branchCode) can't be numbered by
+        // store code, so they are skipped — their RFP stays null for a manual PATCH.
+        val distinctCodes = lines.mapNotNull { it.branchCode }.distinct().sortedDescending()
+        val provided = end - start + BigInteger.ONE
+        if (provided != distinctCodes.size.toBigInteger()) {
+            throw DomainError.Validation(
+                "RFP range covers $provided number(s) but there are ${distinctCodes.size} store code(s) to number",
+            )
+        }
+        // Preserve the width of the provided range (e.g. "0100021" stays 7 digits).
+        val width = maxOf(startRfpNumber.length, endRfpNumber.length)
+        val rfpByCode = distinctCodes.withIndex().associate { (i, code) ->
+            code to (start + i.toBigInteger()).toString().padStart(width, '0')
+        }
+        for (line in lines) {
+            val rfp = line.branchCode?.let { rfpByCode[it] } ?: continue
+            topsheets.updateLine(line.id, rfp, null)
+        }
+        activity.record(callerId, "topsheet.rfp_assigned", "topsheet", topsheetId)
+        // Return in the documented display order (GET /lines / rfpSortOrder).
+        topsheets.findLines(topsheetId)
     }
 }
 

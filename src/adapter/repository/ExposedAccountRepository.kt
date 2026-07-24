@@ -15,6 +15,7 @@ import com.puregoldbe.ibms.adapter.db.toUuid
 import com.puregoldbe.ibms.adapter.db.toUuidOrNull
 import com.puregoldbe.ibms.domain.model.Account
 import com.puregoldbe.ibms.domain.model.AccountStatus
+import com.puregoldbe.ibms.domain.model.AccountExportRow
 import com.puregoldbe.ibms.domain.model.CursorPage
 import com.puregoldbe.ibms.domain.model.AccountUpsertRequest
 import com.puregoldbe.ibms.domain.model.StoreStatus
@@ -89,6 +90,7 @@ class ExposedAccountRepository : AccountRepository {
             row[Accounts.rate] = input.rate.toMoney()
             row[Accounts.installationDate] = input.installationDate.jt()
             input.billingPeriodLabel?.let { row[Accounts.billingPeriodLabel] = it }
+            row[Accounts.isProrated] = input.isProrated
             if (createdBy != null) row[Accounts.createdBy] = EntityID(createdBy.toUuid(), Users)
         }.value
 
@@ -136,6 +138,13 @@ class ExposedAccountRepository : AccountRepository {
             }
             .map { it.toAccount(proofIdsFor(it[Accounts.id].value)) }
 
+    override fun listForExport(providerId: String?, status: AccountStatus?): List<AccountExportRow> =
+        (Accounts innerJoin Stores innerJoin Providers).selectAll()
+            .apply { if (providerId != null) andWhere { Accounts.providerId eq providerId.toUuid() } }
+            .apply { if (status != null) andWhere { Accounts.status eq status } }
+            .orderBy(Stores.branchCode to SortOrder.ASC, Accounts.accountNumber to SortOrder.ASC)
+            .map { it.toExportRow() }
+
     override fun updateStatus(id: String, status: AccountStatus): Account? {
         val uuid = id.toUuidOrNull() ?: return null
         val n = Accounts.update({ Accounts.id eq uuid }) { it[Accounts.status] = status }
@@ -179,6 +188,22 @@ class ExposedAccountRepository : AccountRepository {
         AccountAttachments.selectAll()
             .where { AccountAttachments.accountId eq accountId }
             .map { it[AccountAttachments.attachmentId].value.toString() }
+
+    private fun ResultRow.toExportRow() = AccountExportRow(
+        accountNumber = this[Accounts.accountNumber],
+        circuitId = this[Accounts.circuitId],
+        providerName = this[Providers.name],
+        branchCode = this[Stores.branchCode],
+        storeName = this[Stores.name],
+        planName = this[Accounts.planName],
+        serviceType = this[Accounts.serviceType],
+        speed = this[Accounts.speed],
+        rate = this[Accounts.rate].toMoneyString(),
+        installationDate = this[Accounts.installationDate].kx(),
+        contractStartDate = this[Accounts.contractStartDate]?.kx(),
+        contractEndDate = this[Accounts.contractEndDate]?.kx(),
+        status = this[Accounts.status],
+    )
 
     private fun ResultRow.toAccount(proofIds: List<String>) = Account(
         id = this[Accounts.id].value.toString(),
