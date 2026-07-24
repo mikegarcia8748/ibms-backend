@@ -139,7 +139,7 @@ class ConfirmTopSheetUseCaseSpec : BehaviorSpec({
         every { topsheets.findLines("ts1") } returns listOf(
             line("l1", "a1", "010001"), line("l2", "a2", "010002"),
         )
-        every { accounts.list(null, "p1", null) } returns listOf(acct("a1"), acct("a2", AccountStatus.TERMINATED))
+        every { accounts.list(null, "p1", null) } returns listOf(acct("a1"), acct("a2", AccountStatus.INACTIVE))
         every { topsheets.billedAccountIds("2026-07") } returns emptySet()
 
         When("confirming") {

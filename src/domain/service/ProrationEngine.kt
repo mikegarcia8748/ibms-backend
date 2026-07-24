@@ -91,7 +91,7 @@ object ProrationEngine {
         if (termAt != null) {
             val termDate = termAt.plus(GRACE, TimeZone.UTC).toLocalDateTime(TimeZone.UTC).date
             if (periodOf(termDate) < billingPeriod) return false   // fully terminated before period
-        } else if (account.status == AccountStatus.INACTIVE || account.status == AccountStatus.TERMINATED) {
+        } else if (account.status == AccountStatus.INACTIVE) {
             return false
         }
 

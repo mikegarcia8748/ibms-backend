@@ -90,16 +90,48 @@ class ListTransfersUseCase(
 class DeactivateAccountUseCase(
     private val accounts: AccountRepository,
     private val attachments: AttachmentRepository,
+    private val idempotency: IdempotencyKeyRepository,
     private val activity: ActivityRecorder,
     private val clock: Clock,
     private val tx: TransactionRunner,
 ) {
-    suspend operator fun invoke(accountId: String, proofId: String, actorId: String?): Account = tx.inTransaction {
-        accounts.findById(accountId) ?: throw DomainError.NotFound("account $accountId not found")
-        if (!attachments.exists(proofId)) throw DomainError.Validation("a valid deactivation proofId is required")
-        val result = accounts.markTerminationRequested(accountId, clock.now())
+    suspend operator fun invoke(
+        accountId: String,
+        proofId: String,
+        actorId: String?,
+        idem: IdempotencyContext? = null,
+    ): Account = tx.inTransaction {
+        idempotent(idempotency, "account.deactivate", idem, 200) {
+            val account = accounts.findById(accountId)
+                ?: throw DomainError.NotFound("account $accountId not found")
+            if (account.status != AccountStatus.ACTIVE) {
+                throw DomainError.Conflict("only active accounts can be deactivated")
+            }
+            if (!attachments.exists(proofId)) throw DomainError.Validation("a valid deactivation proofId is required")
+            val result = accounts.markTerminationRequested(accountId, clock.now())
+                ?: throw DomainError.NotFound("account $accountId not found")
+            accounts.linkProof(accountId, proofId)
+            activity.record(actorId, "account.deactivation_requested", "account", accountId)
+            result
+        }
+    }
+}
+
+/** Cancels a pending deactivation: reverts status back to ACTIVE. */
+class CancelDeactivationUseCase(
+    private val accounts: AccountRepository,
+    private val activity: ActivityRecorder,
+    private val tx: TransactionRunner,
+) {
+    suspend operator fun invoke(accountId: String, reason: String, actorId: String?): Account = tx.inTransaction {
+        val account = accounts.findById(accountId)
             ?: throw DomainError.NotFound("account $accountId not found")
-        activity.record(actorId, "account.deactivation_requested", "account", accountId)
+        if (account.status != AccountStatus.TERMINATION_REQUESTED) {
+            throw DomainError.Conflict("only accounts in termination_requested status can have deactivation cancelled")
+        }
+        val result = accounts.cancelTerminationRequested(accountId)
+            ?: throw DomainError.NotFound("account $accountId not found")
+        activity.record(actorId, "account.deactivation_cancelled", "account", accountId)
         result
     }
 }

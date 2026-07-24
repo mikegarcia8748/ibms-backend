@@ -5,6 +5,9 @@ import com.puregoldbe.ibms.domain.port.AccountRepository
 import com.puregoldbe.ibms.domain.port.Clock
 import com.puregoldbe.ibms.domain.port.TransactionRunner
 import com.puregoldbe.ibms.domain.service.GracePeriodPolicy
+import kotlinx.datetime.DateTimeUnit
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.minus
 
 /**
  * Flips accounts whose 30-day termination grace has elapsed from
@@ -21,11 +24,8 @@ class ExpireGracePeriodAccountsUseCase(
 ) {
     suspend operator fun invoke(): Int = tx.inTransaction {
         val now = clock.now()
-        val expired = accounts.list(storeId = null, providerId = null, status = AccountStatus.TERMINATION_REQUESTED)
-            .filter { acc ->
-                val requestedAt = acc.terminationRequestedAt ?: return@filter false
-                GracePeriodPolicy.hasExpired(requestedAt, now)
-            }
+        val cutoff = now.minus(GracePeriodPolicy.GRACE_DAYS, DateTimeUnit.DAY, TimeZone.UTC)
+        val expired = accounts.findExpiredGrace(cutoff)
         expired.forEach { accounts.updateStatus(it.id, AccountStatus.INACTIVE) }
         expired.size
     }

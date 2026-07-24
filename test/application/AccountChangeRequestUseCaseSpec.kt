@@ -110,7 +110,7 @@ class AccountChangeRequestUseCaseSpec : BehaviorSpec({
     // =================================================================
 
     Given("submit validates account is active") {
-        every { accounts.findById("acc-1") } returns activeAccount().copy(status = AccountStatus.TERMINATED)
+        every { accounts.findById("acc-1") } returns activeAccount().copy(status = AccountStatus.INACTIVE)
         When("submitting for a terminated account") {
             Then("a Conflict is thrown") {
                 shouldThrow<DomainError.Conflict> {

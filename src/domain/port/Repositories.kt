@@ -140,6 +140,15 @@ interface AccountRepository {
 
     /** Start the 30-day grace window: status -> termination_requested, timestamp set. */
     fun markTerminationRequested(id: String, at: Instant): Account?
+
+    /** Link a proof attachment to an existing account (deactivation proof). */
+    fun linkProof(accountId: String, proofId: String)
+
+    /** Revert deactivation: status -> ACTIVE, clear terminationRequestedAt. */
+    fun cancelTerminationRequested(id: String): Account?
+
+    /** Find accounts whose grace period has expired (DB-side filtering). */
+    fun findExpiredGrace(before: Instant): List<Account>
 }
 
 interface AccountChangeRequestRepository {

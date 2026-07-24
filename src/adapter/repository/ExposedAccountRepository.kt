@@ -20,6 +20,7 @@ import com.puregoldbe.ibms.domain.model.CursorPage
 import com.puregoldbe.ibms.domain.model.AccountUpsertRequest
 import com.puregoldbe.ibms.domain.model.StoreStatus
 import com.puregoldbe.ibms.domain.port.AccountRepository
+import com.puregoldbe.ibms.domain.service.GracePeriodPolicy
 import com.puregoldbe.ibms.domain.valueobject.toMoney
 import com.puregoldbe.ibms.domain.valueobject.toMoneyString
 import org.jetbrains.exposed.v1.core.*
@@ -68,7 +69,7 @@ class ExposedAccountRepository : AccountRepository {
             .where {
                 (Accounts.providerId eq providerId.toUuid()) and
                     (Accounts.accountNumber eq accountNumber) and
-                    (Accounts.status notInList listOf(AccountStatus.TRANSFERRED, AccountStatus.TERMINATED))
+                    (Accounts.status notInList listOf(AccountStatus.TRANSFERRED, AccountStatus.INACTIVE))
             }
             .count() > 0
 
@@ -159,6 +160,30 @@ class ExposedAccountRepository : AccountRepository {
         return if (n == 0) null else findById(id)
     }
 
+    override fun linkProof(accountId: String, proofId: String) {
+        AccountAttachments.insertIgnore {
+            it[AccountAttachments.accountId] = EntityID(accountId.toUuid(), Accounts)
+            it[AccountAttachments.attachmentId] = EntityID(proofId.toUuid(), Attachments)
+        }
+    }
+
+    override fun cancelTerminationRequested(id: String): Account? {
+        val uuid = id.toUuidOrNull() ?: return null
+        val n = Accounts.update({ Accounts.id eq uuid }) {
+            it[Accounts.status] = AccountStatus.ACTIVE
+            it[Accounts.terminationRequestedAt] = null
+        }
+        return if (n == 0) null else findById(id)
+    }
+
+    override fun findExpiredGrace(before: kotlinx.datetime.Instant): List<Account> =
+        Accounts.selectAll()
+            .where {
+                (Accounts.status eq AccountStatus.TERMINATION_REQUESTED) and
+                    (Accounts.terminationRequestedAt lessEq before.jt())
+            }
+            .map { it.toAccount(proofIdsFor(it[Accounts.id].value)) }
+
     private fun proofIdsFor(accountId: UUID): List<String> =
         AccountAttachments.selectAll()
             .where { AccountAttachments.accountId eq accountId }
@@ -200,6 +225,7 @@ class ExposedAccountRepository : AccountRepository {
         isProrated = this[Accounts.isProrated],
         status = this[Accounts.status],
         terminationRequestedAt = this[Accounts.terminationRequestedAt]?.kx(),
+        graceEndDate = this[Accounts.terminationRequestedAt]?.kx()?.let { GracePeriodPolicy.graceEnd(it) },
         subscriptionProofIds = proofIds,
         createdAt = this[Accounts.createdAt].kx(),
         updatedAt = this[Accounts.updatedAt].kx(),
