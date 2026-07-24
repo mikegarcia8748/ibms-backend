@@ -363,6 +363,18 @@ data class AccountUpsertRequest(
     val installationDate: LocalDate,
     val billingPeriodLabel: String? = null,
     val subscriptionProofIds: List<String> = emptyList(),
+    val isProrated: Boolean = false,
+)
+
+@Serializable
+data class CreateISPAccountInput(
+    val accountNumber: String,
+    val circuitId: String? = null,
+    val providerId: String,
+    val storeId: String,
+    val rate: Money,
+    val installationDate: LocalDate,
+    val subscriptionProofId: String,
 )
 
 @Serializable
