@@ -196,7 +196,7 @@ fun Application.moduleWith(cfg: AppConfig) {
                 assignRfpNumbers, removeDraftLine, confirmTopSheet, listTopSheets, getTopSheet,
                 getTopSheetDetails, approveTopSheet, payTopSheet,
             )
-            exportRoutes(exportTopSheet, exportAccounts, exportTopSheetPdf)
+            exportRoutes(exportTopSheet, exportTopSheetPdf, exportAccounts)
             attachmentRoutes(presignUpload, presignDownload)
             jobRoutes(expireGrace)
         }
