@@ -8,8 +8,8 @@ import com.puregoldbe.ibms.domain.port.AttachmentRepository
 import com.puregoldbe.ibms.domain.port.Clock
 import com.puregoldbe.ibms.domain.port.ProviderRepository
 import com.puregoldbe.ibms.domain.port.TransactionRunner
+import com.puregoldbe.ibms.domain.service.BILLING_ZONE
 import com.puregoldbe.ibms.domain.valueobject.Money
-import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 
 /**
@@ -32,7 +32,7 @@ class CreateISPAccountUseCase(
             if (input.circuitId.isNullOrBlank()) throw DomainError.Validation("circuitId is required for ISP accounts")
             if (!Money.isPositive(input.rate)) throw DomainError.Validation("rate (MRC) must be greater than 0")
 
-            val today = clock.now().toLocalDateTime(TimeZone.of("Asia/Manila")).date
+            val today = clock.now().toLocalDateTime(BILLING_ZONE).date
             if (input.installationDate > today) {
                 throw DomainError.Validation("installationDate cannot be in the future")
             }

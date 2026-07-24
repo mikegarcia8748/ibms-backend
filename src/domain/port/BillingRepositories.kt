@@ -27,16 +27,6 @@ data class NewTopSheetLine(
 )
 
 interface TopSheetRepository {
-    fun create(
-        invoiceNumber: String,
-        billingPeriod: String,
-        providerId: String?,
-        providerName: String?,
-        accountCount: Int,
-        totalAmount: String,
-        compilerId: String,
-    ): TopSheet
-
     fun addLine(topsheetId: String, line: NewTopSheetLine)
 
     fun findById(id: String): TopSheet?

@@ -123,6 +123,36 @@ class ProrationEngineSpec : BehaviorSpec({
         }
     }
 
+    // --- Timezone boundary: every Instant is bucketed in Asia/Manila (UTC+8), not UTC. ---
+
+    Given("a termination timestamp late in the UTC day of a month boundary") {
+        // 2026-08-15T20:00Z is 2026-08-16 04:00 in Asia/Manila, so grace ends 2026-09-15,
+        // not the UTC 2026-09-14. Billing 2026-09 (30 days) -> 15 active days = exactly half.
+        val acc = account(
+            rate = "1000",
+            installationDate = LocalDate(2025, 1, 1),
+            status = AccountStatus.TERMINATION_REQUESTED,
+            terminationRequestedAt = Instant.parse("2026-08-15T20:00:00Z"),
+        )
+        Then("grace-end is bucketed in Manila (15/30 = 500.00, not the UTC 466.67)") {
+            ProrationEngine.proratedAmount(acc, "2026-09") shouldBe "500.00"
+        }
+    }
+
+    Given("a createdAt watermark late in the UTC day of a month boundary") {
+        // 2026-06-30T20:00Z is 2026-07-01 04:00 in Asia/Manila, so the account entered THIS
+        // system in period 2026-07 (not the UTC 2026-06). Its subscription (May) predates that.
+        val acc = account(
+            rate = "1000",
+            installationDate = LocalDate(2026, 5, 10),
+            createdAt = Instant.parse("2026-06-30T20:00:00Z"),
+        )
+        Then("the watermark is 2026-07 in Manila, so no prior period is retro-billed") {
+            ProrationEngine.missedPeriods(acc, "2026-07", emptySet()).shouldBeEmpty()
+            ProrationEngine.arrearsAmount(acc, "2026-07", emptySet()) shouldBe "0.00"
+        }
+    }
+
     Given("a period before the account's subscription starts") {
         val acc = account(rate = "1000", installationDate = LocalDate(2026, 9, 5))
         Then("it is flagged not-yet-subscribed and never eligible") {

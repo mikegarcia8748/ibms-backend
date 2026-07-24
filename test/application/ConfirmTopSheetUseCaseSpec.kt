@@ -224,6 +224,29 @@ class ConfirmTopSheetUseCaseSpec : BehaviorSpec({
         }
     }
 
+    Given("a DRAFT arrears line whose prior period was billed on another topsheet since draft") {
+        every { topsheets.findById("ts1") } returns draftTopsheet
+        every { topsheets.findLines("ts1") } returns listOf(
+            line("l1", "a1", "010001"),
+            line("l2", "a2", "010002", arrearsAmount = "1000.00", arrearsPeriods = listOf("2026-06")),
+        )
+        every { accounts.list(null, "p1", null) } returns listOf(acct("a1"), acct("a2"))
+        every { topsheets.billedAccountIds("2026-07") } returns emptySet()
+        // a2's arrears period 2026-06 was recovered on another (committed) topsheet in the meantime.
+        every { topsheets.billedPeriodsByAccount("p1") } returns mapOf("a2" to setOf("2026-06"))
+
+        When("confirming with acknowledgeArrears = true") {
+            Then("it is rejected as arrears_stale before any invoice is minted") {
+                val err = shouldThrow<DomainError.Conflict> {
+                    useCase("ts1", "confirmer", acknowledgeArrears = true)
+                }
+                err.message shouldContain "a2"
+                verify(exactly = 0) { topsheets.confirm(any(), any(), any(), any()) }
+                verify(exactly = 0) { sequences.nextValue(any()) }
+            }
+        }
+    }
+
     Given("an Idempotency-Key and two identical confirm requests") {
         every { topsheets.findById("ts1") } returns draftTopsheet
         every { topsheets.findLines("ts1") } returns listOf(

@@ -28,28 +28,6 @@ import org.jetbrains.exposed.v1.jdbc.*
 
 class ExposedTopSheetRepository : TopSheetRepository {
 
-    override fun create(
-        invoiceNumber: String,
-        billingPeriod: String,
-        providerId: String?,
-        providerName: String?,
-        accountCount: Int,
-        totalAmount: String,
-        compilerId: String,
-    ): TopSheet {
-        val id = TopSheets.insertAndGetId { row ->
-            row[TopSheets.invoiceNumber] = invoiceNumber
-            row[TopSheets.billingPeriod] = billingPeriod
-            if (providerId != null) row[TopSheets.providerId] = EntityID(providerId.toUuid(), Providers)
-            if (providerName != null) row[TopSheets.providerName] = providerName
-            row[TopSheets.accountCount] = accountCount
-            row[TopSheets.totalAmount] = totalAmount.toMoney()
-            row[TopSheets.status] = TopSheetStatus.COMPILED
-            row[TopSheets.compilerId] = EntityID(compilerId.toUuid(), Users)
-        }.value
-        return findById(id.toString())!!
-    }
-
     override fun addLine(topsheetId: String, line: NewTopSheetLine) {
         TopSheetDetails.insert { row ->
             row[TopSheetDetails.topsheetId] = EntityID(topsheetId.toUuid(), TopSheets)

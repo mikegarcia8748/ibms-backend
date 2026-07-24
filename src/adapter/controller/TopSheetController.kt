@@ -3,7 +3,6 @@ package com.puregoldbe.ibms.adapter.controller
 import com.puregoldbe.ibms.adapter.security.authorize
 import com.puregoldbe.ibms.application.usecase.ApproveTopSheetUseCase
 import com.puregoldbe.ibms.application.usecase.AssignRfpNumbersUseCase
-import com.puregoldbe.ibms.application.usecase.CompileTopSheetUseCase
 import com.puregoldbe.ibms.application.usecase.ConfirmTopSheetUseCase
 import com.puregoldbe.ibms.application.usecase.CreateDraftTopSheetUseCase
 import com.puregoldbe.ibms.application.usecase.GetTopSheetDetailsUseCase
@@ -23,7 +22,6 @@ import kotlinx.serialization.json.Json
 
 fun Route.topSheetRoutes(
     preview: PreviewCompilationUseCase,
-    compile: CompileTopSheetUseCase,
     createDraft: CreateDraftTopSheetUseCase,
     updateLine: UpdateDraftLineUseCase,
     assignRfp: AssignRfpNumbersUseCase,
@@ -53,12 +51,6 @@ fun Route.topSheetRoutes(
             call.authorize(UserRole.SECRETARY)
             val req = call.receive<CompileRequest>()
             call.ok(preview(req.providerId, req.billingPeriod))
-        }
-        post("/compile") {
-            val caller = call.authorize(UserRole.SECRETARY)
-            val req = call.receive<CompileRequest>()
-            val idem = call.idempotencyContext(caller.userId, Json.encodeToString(req))
-            call.created(compile(req.providerId, req.billingPeriod, caller.userId, idem))
         }
         post("/draft") {
             val caller = call.authorize(UserRole.SECRETARY)
