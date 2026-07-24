@@ -202,8 +202,12 @@ class BulkImportAccountsUseCase(
                     accountsReused++
                     providerStats[providerName]!!.accountsReused++
                 } else {
-                    val installationDate = parseDate(startDate) ?: LocalDate(1970, 1, 1)
-                    val notes = if (startDate.isNullOrBlank()) {
+                    val parsedStart = parseDate(startDate)
+                    val installationDate = parsedStart ?: LocalDate(1970, 1, 1)
+                    // Note whenever we fall back to the epoch date — the source date was
+                    // either blank or present-but-unparseable. Gating on blankness alone
+                    // left unparseable dates silently stamped 1970 with no explanation.
+                    val notes = if (parsedStart == null) {
                         "Installation date unavailable from source (bulk import)"
                     } else {
                         null
@@ -217,7 +221,7 @@ class BulkImportAccountsUseCase(
                             serviceType = serviceType?.takeIf { it.isNotBlank() },
                             rate = rate,
                             installationDate = installationDate,
-                            contractStartDate = parseDate(startDate),
+                            contractStartDate = parsedStart,
                             notes = notes,
                         ),
                         createdBy = actorId,
@@ -300,9 +304,13 @@ class BulkImportAccountsUseCase(
 
     /**
      * Strips thousands separators and currency symbols so "2,798.00" becomes "2798.00".
+     * Returns null when the cleaned value is not a valid number (e.g. "abc", "N/A",
+     * "2798 pesos") so the caller skips that row — otherwise Money.parse would throw
+     * NumberFormatException and abort the entire import.
      */
     private fun parseAmount(raw: String?): String? {
         val s = raw?.trim()?.takeIf { it.isNotBlank() } ?: return null
-        return s.replace(",", "").replace("₱", "").trim()
+        val cleaned = s.replace(",", "").replace("₱", "").trim()
+        return cleaned.takeIf { it.toBigDecimalOrNull() != null }
     }
 }
