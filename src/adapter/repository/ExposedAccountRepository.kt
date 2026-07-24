@@ -89,6 +89,7 @@ class ExposedAccountRepository : AccountRepository {
             row[Accounts.rate] = input.rate.toMoney()
             row[Accounts.installationDate] = input.installationDate.jt()
             input.billingPeriodLabel?.let { row[Accounts.billingPeriodLabel] = it }
+            row[Accounts.isProrated] = input.isProrated
             if (createdBy != null) row[Accounts.createdBy] = EntityID(createdBy.toUuid(), Users)
         }.value
 
