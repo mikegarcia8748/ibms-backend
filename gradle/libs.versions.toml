@@ -9,6 +9,7 @@ kotlinxDatetime = "0.6.2"
 ktor = "3.4.3"
 logback = "1.5.35"
 mockk = "1.14.11"
+openpdf = "2.0.3"
 poi = "5.5.1"
 postgresql = "42.7.11"
 prometheus = "1.17.0"
@@ -47,6 +48,9 @@ bcrypt = { module = "at.favre.lib:bcrypt", version.ref = "bcrypt" }
 
 # --- Excel export (server-side, replaces client ExcelJS) ---
 poi-ooxml = { module = "org.apache.poi:poi-ooxml", version.ref = "poi" }
+
+# --- PDF export ---
+openpdf = { module = "com.github.librepdf:openpdf", version.ref = "openpdf" }
 
 # --- Logging / metrics ---
 logback-classic = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }

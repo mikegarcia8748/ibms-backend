@@ -17,6 +17,8 @@ Base URL: `/` · Auth: `Authorization: Bearer <JWT>` · Role: **secretary** (unl
 | POST | `/topsheets/{id}/assign-rfp` | Bearer (secretary) | Bulk-assign a contiguous RFP number range across a draft's lines, sorted by store code. |
 | DELETE | `/topsheets/{id}/lines/{lineId}` | Bearer (secretary) | Remove a line from a DRAFT topsheet. |
 | POST | `/topsheets/{id}/confirm` | Bearer (secretary) | Re-validate and finalize: DRAFT → COMPILED. Mints invoice number. **Idempotent**. |
+| GET | `/exports/topsheet/{id}.xlsx` | Bearer (secretary, finance) | Download compiled TopSheet as Excel spreadsheet. |
+| GET | `/exports/topsheet/{id}.pdf` | Bearer (secretary, finance) | Download compiled TopSheet as PDF report. |
 
 ---
 
@@ -32,6 +34,8 @@ stateDiagram-v2
     DRAFT --> DRAFT: PATCH /{id}/lines/{lineId} (edit RFP, amounts)
     DRAFT --> DRAFT: POST /{id}/assign-rfp (bulk RFP numbering)
     DRAFT --> DRAFT: DELETE /{id}/lines/{lineId} (remove accounts)
+    COMPILED --> [*]: GET /exports/topsheet/{id}.xlsx
+    COMPILED --> [*]: GET /exports/topsheet/{id}.pdf
 ```
 
 ---
@@ -308,6 +312,111 @@ No request body required.
 
 ---
 
+## GET `/exports/topsheet/{id}.xlsx`
+
+Downloads the compiled TopSheet report as an Excel spreadsheet.
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `id` | `string (UUID)` | The TopSheet ID. |
+
+### Authorization
+
+Bearer token. Allowed roles: **SECRETARY**, **FINANCE**.
+
+### Success — `200 OK`
+
+| Header | Value |
+|--------|-------|
+| `Content-Type` | `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` |
+| `Content-Disposition` | `attachment; filename="TopSheet_{invoiceNumber}_{billingPeriod}.xlsx"` |
+
+Body: Binary Excel bytes.
+
+### Error Responses
+
+| Status | Condition |
+|--------|-----------|
+| `403` | Caller lacks SECRETARY or FINANCE role. |
+| `404` | TopSheet not found. |
+
+---
+
+## GET `/exports/topsheet/{id}.pdf`
+
+Downloads the compiled TopSheet report as a PDF file. The PDF replicates the same layout as the Excel export.
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `id` | `string (UUID)` | The TopSheet ID. |
+
+### Authorization
+
+Bearer token. Allowed roles: **SECRETARY**, **FINANCE**.
+
+### PDF Layout
+
+The generated PDF contains:
+
+1. **Title:** "PUREGOLD PRICE CLUB, INC."
+2. **Subtitle:** "TopSheet Report"
+3. **Metadata block:**
+   - Provider name
+   - Invoice number
+   - Billing Period
+   - Total Accounts
+4. **Data table** — 7 columns:
+
+   | Column | Description |
+   |--------|-------------|
+   | NO. | Row number (1-based). |
+   | STORE CO | Store branch code. |
+   | STORE NAME | Store display name. |
+   | CID# | Circuit identifier. |
+   | ACCT# | Account number. |
+   | MRC | Monthly recurring charge (prorated amount). |
+   | INVOICE NUMBER | Dynamically computed per row (see below). |
+
+5. **GRAND TOTAL row** — sum of all MRC values.
+6. **Signatories:**
+   - By: Mary Ann Agustin
+   - Noted by: Gilbert Arciaga
+   - Approved by: Mr. Vincent Co
+
+### INVOICE NUMBER Column Logic
+
+Each row's invoice number is dynamically computed as:
+
+```
+account_number + month_abbreviation + year
+```
+
+Example: account number `929123420`, billing period `2026-07` → `"929123420JUL2026"`.
+
+The month abbreviation is the uppercase 3-letter English abbreviation (JAN, FEB, MAR, APR, MAY, JUN, JUL, AUG, SEP, OCT, NOV, DEC) derived from the TopSheet's `billingPeriod`.
+
+### Success — `200 OK`
+
+| Header | Value |
+|--------|-------|
+| `Content-Type` | `application/pdf` |
+| `Content-Disposition` | `attachment; filename="TopSheet_{invoiceNumber}_{billingPeriod}.pdf"` |
+
+Body: Binary PDF bytes.
+
+### Error Responses
+
+| Status | Condition |
+|--------|-----------|
+| `403` | Caller lacks SECRETARY or FINANCE role. |
+| `404` | TopSheet not found. |
+
+---
+
 ## Idempotency
 
 Both `POST /topsheets/draft` and `POST /topsheets/{id}/confirm` are idempotent via the `Idempotency-Key` header:
@@ -391,6 +500,18 @@ curl -X POST http://localhost:8080/topsheets/<topsheet-id>/confirm \
   -H "Idempotency-Key: confirm-<topsheet-id>"
 ```
 
+### Download Excel Export
+```bash
+curl -O -J http://localhost:8080/exports/topsheet/<topsheet-id>.xlsx \
+  -H "Authorization: Bearer <jwt>"
+```
+
+### Download PDF Export
+```bash
+curl -O -J http://localhost:8080/exports/topsheet/<topsheet-id>.pdf \
+  -H "Authorization: Bearer <jwt>"
+```
+
 ---
 
 ## Example — JavaScript / Fetch
@@ -452,3 +573,5 @@ console.log(`Compiled: ${compiled.invoiceNumber}`);
 - The confirm endpoint is idempotent — safe to retry on network timeout.
 - After confirm, the topsheet is immutable (cannot be cancelled or voided).
 - The `proratedAmount` on each line can be overridden by the secretary during review to handle special billing cases.
+- Export endpoints (`.xlsx` and `.pdf`) are available for any compiled, approved, or paid topsheet. The INVOICE NUMBER column in exports is computed dynamically from the account number and billing period — it is not stored on the line item.
+- Both export formats produce the same data; PDF is landscape A4 optimized for print.
