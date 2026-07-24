@@ -55,6 +55,8 @@ dependencies {
     implementation(libs.bcrypt)
     // --- Excel export ---
     implementation(libs.poi.ooxml)
+    // --- PDF export ---
+    implementation(libs.openpdf)
     // --- Logging / metrics ---
     implementation(libs.logback.classic)
     implementation(libs.micrometer.registryPrometheus)
