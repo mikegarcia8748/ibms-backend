@@ -135,6 +135,7 @@ fun Application.moduleWith(cfg: AppConfig) {
     val removeDraftLine = RemoveDraftLineUseCase(topsheets, activities, tx)
     val confirmTopSheet = ConfirmTopSheetUseCase(accounts, stores, topsheets, sequences, idempotency, activities, clock, tx)
     val exportTopSheet = ExportTopSheetExcelUseCase(topsheets, tx)
+    val exportAccounts = ExportAccountsExcelUseCase(accounts, providers, tx)
     val expireGrace = ExpireGracePeriodAccountsUseCase(accounts, clock, tx)
     val listActivities = ListActivitiesUseCase(activities, tx)
     val triggerOcr = TriggerOcrExtractionUseCase(ocrBatches, ocrGateway, tx)
@@ -192,7 +193,7 @@ fun Application.moduleWith(cfg: AppConfig) {
                 assignRfpNumbers, removeDraftLine, confirmTopSheet, listTopSheets, getTopSheet,
                 getTopSheetDetails, approveTopSheet, payTopSheet,
             )
-            exportRoutes(exportTopSheet)
+            exportRoutes(exportTopSheet, exportAccounts)
             attachmentRoutes(presignUpload, presignDownload)
             jobRoutes(expireGrace)
         }
