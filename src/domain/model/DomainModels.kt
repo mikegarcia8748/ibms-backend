@@ -72,10 +72,14 @@ enum class AccountStatus {
 
 @Serializable
 enum class TopSheetStatus {
-    @SerialName("draft")    DRAFT,
-    @SerialName("compiled") COMPILED,
-    @SerialName("approved") APPROVED,
-    @SerialName("paid")     PAID,
+    @SerialName("draft")        DRAFT,
+    @SerialName("compiled")     COMPILED,
+    @SerialName("rfp_assigned") RFP_ASSIGNED,
+    // 'approved' now means "released to finance" (secretary-triggered handoff);
+    // there is no separate Finance-approval step. 'paid' is reserved for a future
+    // external paid-callback flow.
+    @SerialName("approved")     APPROVED,
+    @SerialName("paid")         PAID,
 }
 
 @Serializable
@@ -206,6 +210,8 @@ data class TopSheetDetail(
     val accountNumber: String? = null,
     val accountStatus: String? = null,
     val rfpNumber: String? = null,
+    /** Unique key returned by the external RFP system, used to link/reconcile this line. */
+    val rfpUniqueKey: String? = null,
     val rfpSortOrder: Int? = null,
     val arrearsAmount: Money = "0.00",
     val arrearsPeriods: List<String> = emptyList(),

@@ -7,6 +7,7 @@ import com.puregoldbe.ibms.adapter.db.migrate
 import com.puregoldbe.ibms.adapter.gateway.ExposedTransactionRunner
 import com.puregoldbe.ibms.adapter.gateway.LocalDiskStorage
 import com.puregoldbe.ibms.adapter.gateway.SimulatedOcrExtractor
+import com.puregoldbe.ibms.adapter.gateway.SimulatedRfpGateway
 import com.puregoldbe.ibms.adapter.gateway.SystemClock
 import com.puregoldbe.ibms.adapter.repository.*
 import com.puregoldbe.ibms.adapter.security.AUTH_SESSION
@@ -66,6 +67,8 @@ fun Application.moduleWith(cfg: AppConfig) {
     val sessionPolicy = cfg.auth.sessionPolicy()
     val presign = LocalHmacPresign(cfg.jwt.secret, cfg.appUrl, clock)
     val ocrGateway = SimulatedOcrExtractor()
+    // External RFP system. Simulated until cfg.rfpApiBaseUrl is set + an HTTP adapter lands.
+    val rfpGateway = SimulatedRfpGateway()
 
     val users = ExposedUserRepository()
     val sessions = ExposedSessionRepository()
@@ -128,11 +131,11 @@ fun Application.moduleWith(cfg: AppConfig) {
     val listTopSheets = ListTopSheetsUseCase(topsheets, tx)
     val getTopSheet = GetTopSheetUseCase(topsheets, tx)
     val getTopSheetDetails = GetTopSheetDetailsUseCase(topsheets, tx)
-    val approveTopSheet = ApproveTopSheetUseCase(topsheets, activities, clock, tx)
     val payTopSheet = PayTopSheetUseCase(topsheets, idempotency, clock, tx)
     val createDraftTopSheet = CreateDraftTopSheetUseCase(accounts, stores, providers, topsheets, batchSequences, sequences, idempotency, activities, clock, tx)
     val updateDraftLine = UpdateDraftLineUseCase(topsheets, tx)
-    val assignRfpNumbers = AssignRfpNumbersUseCase(topsheets, activities, tx)
+    val generateRfp = GenerateRfpUseCase(topsheets, rfpGateway, idempotency, activities, tx)
+    val releaseToFinance = ReleaseToFinanceUseCase(topsheets, rfpGateway, activities, clock, tx)
     val removeDraftLine = RemoveDraftLineUseCase(topsheets, activities, tx)
     val confirmTopSheet = ConfirmTopSheetUseCase(accounts, stores, topsheets, sequences, idempotency, activities, clock, tx)
     val exportTopSheet = ExportTopSheetExcelUseCase(topsheets, tx)
@@ -194,8 +197,8 @@ fun Application.moduleWith(cfg: AppConfig) {
             ocrRoutes(triggerOcr, listOcrBatches, getOcrBatchRows, listOcrTemplates, createOcrTemplate, updateOcrTemplate)
             topSheetRoutes(
                 previewCompilation, createDraftTopSheet, updateDraftLine,
-                assignRfpNumbers, removeDraftLine, confirmTopSheet, listTopSheets, getTopSheet,
-                getTopSheetDetails, approveTopSheet, payTopSheet,
+                generateRfp, releaseToFinance, removeDraftLine, confirmTopSheet, listTopSheets, getTopSheet,
+                getTopSheetDetails, payTopSheet,
             )
             exportRoutes(exportTopSheet, exportAccounts)
             dashboardRoutes(dashboardSummary, listDashboardAccounts, listBillingHistory, listStores, exportAccounts)

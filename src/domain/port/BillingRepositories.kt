@@ -26,6 +26,13 @@ data class NewTopSheetLine(
     val arrearsPeriods: List<String> = emptyList(),
 )
 
+/** An RFP number + external unique key to write onto a single existing line. */
+data class TopSheetLineRfp(
+    val lineId: String,
+    val rfpNumber: String,
+    val uniqueKey: String,
+)
+
 interface TopSheetRepository {
     fun addLine(topsheetId: String, line: NewTopSheetLine)
 
@@ -52,7 +59,18 @@ interface TopSheetRepository {
      */
     fun billedPeriodsByAccount(providerId: String): Map<String, Set<String>>
 
-    fun approve(id: String, approverId: String, at: Instant): TopSheet?
+    /**
+     * Write the external system's RFP number + unique key onto each line and move
+     * the header COMPILED -> RFP_ASSIGNED (status-guarded). Returns null if the
+     * topsheet was not in COMPILED.
+     */
+    fun assignExternalRfp(topsheetId: String, lines: List<TopSheetLineRfp>): TopSheet?
+
+    /**
+     * Secretary handoff to finance: move RFP_ASSIGNED -> APPROVED (status-guarded),
+     * recording who released it and when. Returns null if not in RFP_ASSIGNED.
+     */
+    fun releaseToFinance(id: String, releasedById: String, at: Instant): TopSheet?
 
     /** Move to paid and cascade all line items to paid. */
     fun pay(id: String, at: Instant): TopSheet?
@@ -67,7 +85,8 @@ interface TopSheetRepository {
         compilerId: String,
     ): TopSheet
 
-    fun updateLine(detailId: String, rfpNumber: String?, proratedAmount: String?): TopSheetDetail?
+    /** Edit a draft line's prorated amount (RFP is now assigned by the external system). */
+    fun updateLineAmount(detailId: String, proratedAmount: String): TopSheetDetail?
     fun removeLine(detailId: String): Boolean
     fun confirm(id: String, invoiceNumber: String, accountCount: Int, totalAmount: String): TopSheet?
 }
