@@ -112,7 +112,7 @@ fun Application.moduleWith(cfg: AppConfig) {
     val getFloating = GetFloatingAccountsUseCase(accounts, tx)
     val listAccounts = ListAccountsUseCase(accounts, tx)
     val getAccount = GetAccountUseCase(accounts, tx)
-    val createAccount = CreateAccountUseCase(accounts, providers, stores, activities, tx)
+    val createAccount = CreateAccountUseCase(accounts, providers, stores, activities, attachments, tx)
     val createISPAccount = CreateISPAccountUseCase(createAccount, providers, attachments, clock, tx)
     val updateAccount = UpdateAccountUseCase(accounts, providers, stores, tx)
     val transferAccount = TransferAccountUseCase(accounts, stores, transfers, attachments, idempotency, activities, clock, tx)

@@ -9,6 +9,7 @@ import com.puregoldbe.ibms.domain.port.Clock
 import com.puregoldbe.ibms.domain.port.ProviderRepository
 import com.puregoldbe.ibms.domain.port.TransactionRunner
 import com.puregoldbe.ibms.domain.service.BILLING_ZONE
+import com.puregoldbe.ibms.domain.service.PdfProofPolicy
 import com.puregoldbe.ibms.domain.valueobject.Money
 import kotlinx.datetime.toLocalDateTime
 
@@ -38,9 +39,10 @@ class CreateISPAccountUseCase(
             }
 
             if (input.subscriptionProofId.isBlank()) throw DomainError.Validation("subscriptionProofId is required")
-            if (!attachments.exists(input.subscriptionProofId)) {
-                throw DomainError.Validation("subscription proof attachment not found")
-            }
+            PdfProofPolicy.requireUploadedPdf(
+                attachments.findById(input.subscriptionProofId),
+                "subscriptionProofId",
+            )
 
             // --- Compute proration flag ---
             val provider = providers.findById(input.providerId)

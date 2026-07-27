@@ -11,6 +11,7 @@ import com.puregoldbe.ibms.domain.port.IdempotencyContext
 import com.puregoldbe.ibms.support.FakeClock
 import com.puregoldbe.ibms.support.FakeIdempotencyKeyRepository
 import com.puregoldbe.ibms.support.ImmediateTransactionRunner
+import com.puregoldbe.ibms.support.uploadedPdfAttachment
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.IsolationMode
 import io.kotest.core.spec.style.BehaviorSpec
@@ -65,7 +66,7 @@ class DeactivateAccountUseCaseSpec : BehaviorSpec({
     Given("an active account") {
         val account = activeAccount()
         every { accounts.findById("acc-1") } returns account
-        every { attachments.exists("proof-1") } returns true
+        every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1")
         every { accounts.markTerminationRequested("acc-1", any()) } returns terminationRequestedAccount()
 
         When("deactivating with valid proof") {
@@ -80,7 +81,7 @@ class DeactivateAccountUseCaseSpec : BehaviorSpec({
 
     Given("a non-active account (TERMINATION_REQUESTED)") {
         every { accounts.findById("acc-1") } returns terminationRequestedAccount()
-        every { attachments.exists("proof-1") } returns true
+        every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1")
 
         When("deactivating") {
             Then("throws Conflict") {
@@ -93,7 +94,7 @@ class DeactivateAccountUseCaseSpec : BehaviorSpec({
 
     Given("a transferred account") {
         every { accounts.findById("acc-1") } returns transferredAccount()
-        every { attachments.exists("proof-1") } returns true
+        every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1")
 
         When("deactivating") {
             Then("throws Conflict") {
@@ -106,7 +107,7 @@ class DeactivateAccountUseCaseSpec : BehaviorSpec({
 
     Given("an inactive account") {
         every { accounts.findById("acc-1") } returns inactiveAccount()
-        every { attachments.exists("proof-1") } returns true
+        every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1")
 
         When("deactivating") {
             Then("throws Conflict") {
@@ -120,7 +121,7 @@ class DeactivateAccountUseCaseSpec : BehaviorSpec({
     Given("valid deactivation with proof linking") {
         val account = activeAccount()
         every { accounts.findById("acc-1") } returns account
-        every { attachments.exists("proof-1") } returns true
+        every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1")
         every { accounts.markTerminationRequested("acc-1", any()) } returns terminationRequestedAccount()
 
         When("deactivating") {
@@ -134,7 +135,7 @@ class DeactivateAccountUseCaseSpec : BehaviorSpec({
     Given("valid deactivation with activity recording") {
         val account = activeAccount()
         every { accounts.findById("acc-1") } returns account
-        every { attachments.exists("proof-1") } returns true
+        every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1")
         every { accounts.markTerminationRequested("acc-1", any()) } returns terminationRequestedAccount()
 
         When("deactivating") {
@@ -150,7 +151,7 @@ class DeactivateAccountUseCaseSpec : BehaviorSpec({
     Given("invalid proofId (doesn't exist)") {
         val account = activeAccount()
         every { accounts.findById("acc-1") } returns account
-        every { attachments.exists("bad-proof") } returns false
+        every { attachments.findById("bad-proof") } returns null
 
         When("deactivating") {
             Then("throws Validation error") {
@@ -176,7 +177,7 @@ class DeactivateAccountUseCaseSpec : BehaviorSpec({
     Given("idempotency key with same request sent twice") {
         val account = activeAccount()
         every { accounts.findById("acc-1") } returns account
-        every { attachments.exists("proof-1") } returns true
+        every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1")
         every { accounts.markTerminationRequested("acc-1", any()) } returns terminationRequestedAccount()
 
         val idem = IdempotencyContext(key = "idem-key-1", requestHash = "hash-abc", userId = "actor-1")
@@ -197,8 +198,8 @@ class DeactivateAccountUseCaseSpec : BehaviorSpec({
     Given("idempotency key with different request body") {
         val account = activeAccount()
         every { accounts.findById("acc-1") } returns account
-        every { attachments.exists("proof-1") } returns true
-        every { attachments.exists("proof-2") } returns true
+        every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1")
+        every { attachments.findById("proof-2") } returns uploadedPdfAttachment("proof-2")
         every { accounts.markTerminationRequested("acc-1", any()) } returns terminationRequestedAccount()
 
         val idem1 = IdempotencyContext(key = "idem-key-2", requestHash = "hash-original", userId = "actor-1")

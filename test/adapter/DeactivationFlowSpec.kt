@@ -3,6 +3,7 @@ package com.puregoldbe.ibms.adapter
 import com.puregoldbe.ibms.domain.model.UserRole
 import com.puregoldbe.ibms.support.signIn
 import com.puregoldbe.ibms.support.testModule
+import com.puregoldbe.ibms.support.uploadPdfProof
 import io.kotest.core.spec.style.BehaviorSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
@@ -24,16 +25,9 @@ class DeactivationFlowSpec : BehaviorSpec({
     fun JsonObject.strOrNull(key: String): String? =
         (this[key] as? JsonPrimitive)?.contentOrNull
 
-    /** Create a subscription-proof attachment via the presign flow; returns the attachment id. */
-    suspend fun ApplicationTestBuilder.createAttachment(token: String, purpose: String = "subscription_proof"): String {
-        val res = client.post("/attachments/presign/upload") {
-            header(HttpHeaders.Authorization, "Bearer $token")
-            contentType(ContentType.Application.Json)
-            setBody("""{"fileName":"proof.txt","contentType":"text/plain","purpose":"$purpose"}""")
-        }
-        res.status shouldBe HttpStatusCode.OK
-        return res.bodyAsText().asJson().data().str("attachmentId")
-    }
+    /** Create a fully-uploaded PDF proof attachment via the presign flow; returns the attachment id. */
+    suspend fun ApplicationTestBuilder.createAttachment(token: String, purpose: String = "subscription_proof"): String =
+        uploadPdfProof(token, purpose)
 
     /** Full prerequisite chain: provider -> attachment -> store -> active account. */
     suspend fun ApplicationTestBuilder.setupActiveAccount(token: String): String {
@@ -59,10 +53,11 @@ class DeactivationFlowSpec : BehaviorSpec({
         store.status shouldBe HttpStatusCode.Created
         val storeId = store.bodyAsText().asJson().data().str("id")
 
+        val subProof = createAttachment(token, "subscription_proof")
         val acc = client.post("/accounts") {
             header(HttpHeaders.Authorization, "Bearer $token")
             contentType(ContentType.Application.Json)
-            setBody("""{"accountNumber":"ACC-${System.nanoTime()}","providerId":"$providerId","storeId":"$storeId","rate":"1000.00","installationDate":"2025-01-01"}""")
+            setBody("""{"accountNumber":"ACC-${System.nanoTime()}","providerId":"$providerId","storeId":"$storeId","rate":"1000.00","installationDate":"2025-01-01","subscriptionProofIds":["$subProof"]}""")
         }
         acc.status shouldBe HttpStatusCode.Created
         return acc.bodyAsText().asJson().data().str("id")
@@ -229,10 +224,11 @@ class DeactivationFlowSpec : BehaviorSpec({
                         setBody("""{"storeType":"puregold","branchCode":"TR2-${System.nanoTime()}","name":"Store2","proofOfInstallationId":"$installProof2"}""")
                     }.bodyAsText().asJson().data().str("id")
 
+                    val accSubProof = createAttachment(sec.token, "subscription_proof")
                     val accRes = client.post("/accounts") {
                         header(HttpHeaders.Authorization, "Bearer ${sec.token}")
                         contentType(ContentType.Application.Json)
-                        setBody("""{"accountNumber":"TRN-${System.nanoTime()}","providerId":"$providerId","storeId":"$store1","rate":"500.00","installationDate":"2025-03-01"}""")
+                        setBody("""{"accountNumber":"TRN-${System.nanoTime()}","providerId":"$providerId","storeId":"$store1","rate":"500.00","installationDate":"2025-03-01","subscriptionProofIds":["$accSubProof"]}""")
                     }
                     val accountId = accRes.bodyAsText().asJson().data().str("id")
 

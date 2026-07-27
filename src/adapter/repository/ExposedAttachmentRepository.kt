@@ -26,6 +26,14 @@ class ExposedAttachmentRepository : AttachmentRepository {
         return Attachments.selectAll().where { Attachments.id eq uuid }.count() > 0
     }
 
+    override fun markUploaded(id: String, sizeBytes: Long, contentType: String) {
+        val uuid = id.toUuidOrNull() ?: return
+        Attachments.update({ Attachments.id eq uuid }) {
+            it[Attachments.sizeBytes] = sizeBytes
+            it[Attachments.contentType] = contentType
+        }
+    }
+
     override fun create(
         purpose: AttachmentPurpose,
         entityType: String?,

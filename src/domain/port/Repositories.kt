@@ -106,6 +106,9 @@ interface AttachmentRepository {
         sizeBytes: Long?,
         uploadedBy: String?,
     ): Attachment
+
+    /** Stamp the row once bytes are actually stored: records the true size + content type. */
+    fun markUploaded(id: String, sizeBytes: Long, contentType: String)
 }
 
 interface StoreRepository {

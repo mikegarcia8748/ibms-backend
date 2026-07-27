@@ -15,6 +15,7 @@ import com.puregoldbe.ibms.domain.port.IdempotencyKeyRepository
 import com.puregoldbe.ibms.domain.port.StoreRepository
 import com.puregoldbe.ibms.domain.port.TransactionRunner
 import com.puregoldbe.ibms.domain.port.TransferRepository
+import com.puregoldbe.ibms.domain.service.PdfProofPolicy
 
 /**
  * Relocates a circuit to a new store. Transactionally: mark the old account
@@ -46,7 +47,7 @@ class TransferAccountUseCase(
                 throw DomainError.Conflict("account $accountId has already been transferred")
             }
             stores.findById(newStoreId) ?: throw DomainError.Validation("unknown newStoreId $newStoreId")
-            if (!attachments.exists(proofId)) throw DomainError.Validation("a valid transfer proofId is required")
+            PdfProofPolicy.requireUploadedPdf(attachments.findById(proofId), "transfer proofId")
 
             accounts.updateStatus(old.id, AccountStatus.TRANSFERRED)
             val moved = accounts.create(
@@ -107,7 +108,7 @@ class DeactivateAccountUseCase(
             if (account.status != AccountStatus.ACTIVE) {
                 throw DomainError.Conflict("only active accounts can be deactivated")
             }
-            if (!attachments.exists(proofId)) throw DomainError.Validation("a valid deactivation proofId is required")
+            PdfProofPolicy.requireUploadedPdf(attachments.findById(proofId), "deactivation proofId")
             val result = accounts.markTerminationRequested(accountId, clock.now())
                 ?: throw DomainError.NotFound("account $accountId not found")
             accounts.linkProof(accountId, proofId)

@@ -3,6 +3,7 @@ package com.puregoldbe.ibms.adapter
 import com.puregoldbe.ibms.domain.model.UserRole
 import com.puregoldbe.ibms.support.signIn
 import com.puregoldbe.ibms.support.testModule
+import com.puregoldbe.ibms.support.uploadPdfProof
 import io.kotest.core.spec.style.BehaviorSpec
 import io.kotest.matchers.shouldBe
 import io.ktor.client.request.*
@@ -79,14 +80,16 @@ class TopSheetDraftFlowSpec : BehaviorSpec({
                         )
                     }.bodyAsText().asJson().data().str("id")
 
-                    suspend fun createAccount(num: String, storeId: String) =
-                        client.post("/accounts") {
+                    suspend fun createAccount(num: String, storeId: String): HttpResponse {
+                        val proofId1 = uploadPdfProof(token, "subscription_proof")
+                        return client.post("/accounts") {
                             header(HttpHeaders.Authorization, "Bearer $token")
                             contentType(ContentType.Application.Json)
                             setBody(
-                                """{"accountNumber":"$num","providerId":"$providerId","storeId":"$storeId","rate":"1000","installationDate":"2020-01-01"}""",
+                                """{"accountNumber":"$num","providerId":"$providerId","storeId":"$storeId","rate":"1000","installationDate":"2020-01-01","subscriptionProofIds":["$proofId1"]}""",
                             )
                         }
+                    }
 
                     createAccount("acc-$s-1", store118Id)
                     createAccount("acc-$s-2", store118Id)
@@ -191,11 +194,12 @@ class TopSheetDraftFlowSpec : BehaviorSpec({
                         setBody("""{"name":"Globe-$s","paymentScheduleDay":10}""")
                     }.bodyAsText().asJson().data().str("id")
 
+                    val proofId2 = uploadPdfProof(token, "subscription_proof")
                     client.post("/accounts") {
                         header(HttpHeaders.Authorization, "Bearer $token")
                         contentType(ContentType.Application.Json)
                         setBody(
-                            """{"accountNumber":"g-$s-1","providerId":"$provider2Id","storeId":"$store118Id","rate":"500","installationDate":"2020-01-01"}""",
+                            """{"accountNumber":"g-$s-1","providerId":"$provider2Id","storeId":"$store118Id","rate":"500","installationDate":"2020-01-01","subscriptionProofIds":["$proofId2"]}""",
                         )
                     }.status shouldBe HttpStatusCode.Created
 
@@ -266,11 +270,12 @@ class TopSheetDraftFlowSpec : BehaviorSpec({
                         )
                     }.bodyAsText().asJson().data().str("id")
 
+                    val proofId3 = uploadPdfProof(token, "subscription_proof")
                     client.post("/accounts") {
                         header(HttpHeaders.Authorization, "Bearer $token")
                         contentType(ContentType.Application.Json)
                         setBody(
-                            """{"accountNumber":"nr-$s-1","providerId":"$providerId","storeId":"$storeId","rate":"1000","installationDate":"2020-01-01"}""",
+                            """{"accountNumber":"nr-$s-1","providerId":"$providerId","storeId":"$storeId","rate":"1000","installationDate":"2020-01-01","subscriptionProofIds":["$proofId3"]}""",
                         )
                     }.status shouldBe HttpStatusCode.Created
 
@@ -318,11 +323,12 @@ class TopSheetDraftFlowSpec : BehaviorSpec({
                         )
                     }.bodyAsText().asJson().data().str("id")
 
+                    val proofId4 = uploadPdfProof(token, "subscription_proof")
                     client.post("/accounts") {
                         header(HttpHeaders.Authorization, "Bearer $token")
                         contentType(ContentType.Application.Json)
                         setBody(
-                            """{"accountNumber":"id-$s-1","providerId":"$providerId","storeId":"$storeId","rate":"1000","installationDate":"2020-01-01"}""",
+                            """{"accountNumber":"id-$s-1","providerId":"$providerId","storeId":"$storeId","rate":"1000","installationDate":"2020-01-01","subscriptionProofIds":["$proofId4"]}""",
                         )
                     }.status shouldBe HttpStatusCode.Created
 
@@ -379,11 +385,12 @@ class TopSheetDraftFlowSpec : BehaviorSpec({
                         )
                     }.bodyAsText().asJson().data().str("id")
 
+                    val proofId5 = uploadPdfProof(token, "subscription_proof")
                     client.post("/accounts") {
                         header(HttpHeaders.Authorization, "Bearer $token")
                         contentType(ContentType.Application.Json)
                         setBody(
-                            """{"accountNumber":"dp-$s-1","providerId":"$providerId","storeId":"$storeId","rate":"1000","installationDate":"2020-01-01"}""",
+                            """{"accountNumber":"dp-$s-1","providerId":"$providerId","storeId":"$storeId","rate":"1000","installationDate":"2020-01-01","subscriptionProofIds":["$proofId5"]}""",
                         )
                     }.status shouldBe HttpStatusCode.Created
 
@@ -441,12 +448,15 @@ class TopSheetDraftFlowSpec : BehaviorSpec({
                     val storeHigh = createStore("220-$s")
                     val storeLow = createStore("210-$s")
 
-                    suspend fun createAccount(num: String, storeId: String) = client.post("/accounts") {
-                        header(HttpHeaders.Authorization, "Bearer $token")
-                        contentType(ContentType.Application.Json)
-                        setBody(
-                            """{"accountNumber":"$num","providerId":"$providerId","storeId":"$storeId","rate":"1000","installationDate":"2020-01-01"}""",
-                        )
+                    suspend fun createAccount(num: String, storeId: String): HttpResponse {
+                        val proofId6 = uploadPdfProof(token, "subscription_proof")
+                        return client.post("/accounts") {
+                            header(HttpHeaders.Authorization, "Bearer $token")
+                            contentType(ContentType.Application.Json)
+                            setBody(
+                                """{"accountNumber":"$num","providerId":"$providerId","storeId":"$storeId","rate":"1000","installationDate":"2020-01-01","subscriptionProofIds":["$proofId6"]}""",
+                            )
+                        }
                     }
                     createAccount("r-$s-1", storeHigh)
                     createAccount("r-$s-2", storeHigh)
