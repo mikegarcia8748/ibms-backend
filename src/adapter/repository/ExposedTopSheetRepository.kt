@@ -80,6 +80,31 @@ class ExposedTopSheetRepository : TopSheetRepository {
             .toCursorPage(limit) { it.id }
     }
 
+    override fun pageHistory(
+        providerId: String?,
+        billingPeriod: String?,
+        status: TopSheetStatus?,
+        cursor: String?,
+        limit: Int,
+    ): CursorPage<TopSheet> {
+        val anchor = TopSheets.keysetAnchor(TopSheets.createdAt, cursor)
+        return TopSheets.selectAll()
+            .apply { if (providerId != null) andWhere { TopSheets.providerId eq providerId.toUuid() } }
+            .apply { if (billingPeriod != null) andWhere { TopSheets.billingPeriod eq billingPeriod } }
+            .apply {
+                if (status != null) {
+                    andWhere { TopSheets.status eq status }
+                } else {
+                    andWhere { TopSheets.status neq TopSheetStatus.DRAFT }
+                }
+            }
+            .apply { if (anchor != null) andWhere { keysetAfter(TopSheets, TopSheets.createdAt, anchor) } }
+            .orderBy(TopSheets.createdAt to SortOrder.ASC, TopSheets.id to SortOrder.ASC)
+            .limit(limit + 1)
+            .map { it.toTopSheet() }
+            .toCursorPage(limit) { it.id }
+    }
+
     override fun findLines(topsheetId: String): List<TopSheetDetail> {
         val uuid = topsheetId.toUuidOrNull() ?: return emptyList()
         // Contract order: rfpSortOrder ASC (== store branchCode DESC). Legacy one-shot

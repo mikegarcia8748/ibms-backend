@@ -635,3 +635,59 @@ data class AccountExportRow(
 
 @Serializable
 data class CancelDeactivationRequest(val reason: String)
+
+// =====================================================================
+//  Manager's Dashboard (aggregations + denormalized listing)
+// =====================================================================
+/**
+ * Headline aggregation for the Manager's Dashboard. [totalActiveAccounts] and
+ * [totalActiveMrc] cover ACTIVE (billable) accounts only; [statusBreakdown]
+ * carries the per-status counts across every [AccountStatus]; [byProvider] is
+ * the per-ISP (provider) breakdown of active accounts and their MRC.
+ */
+@Serializable
+data class DashboardSummary(
+    val totalActiveAccounts: Int,
+    val totalActiveMrc: Money,
+    val statusBreakdown: List<StatusCount>,
+    val byProvider: List<ProviderAccountSummary>,
+)
+
+@Serializable
+data class StatusCount(
+    val status: AccountStatus,
+    val count: Int,
+)
+
+@Serializable
+data class ProviderAccountSummary(
+    val providerId: String,
+    val providerName: String,
+    val activeAccountCount: Int,
+    val activeMrc: Money,
+)
+
+/**
+ * A denormalized account row for the dashboard listing — like [AccountExportRow]
+ * but carries ids and is served as a paginated JSON item so the UI can link
+ * through to the account/store/provider.
+ */
+@Serializable
+data class AccountListItem(
+    val id: String,
+    val accountNumber: String,
+    val circuitId: String? = null,
+    val providerId: String,
+    val providerName: String,
+    val storeId: String,
+    val branchCode: String,
+    val storeName: String,
+    val planName: String? = null,
+    val serviceType: String? = null,
+    val speed: String? = null,
+    val rate: Money,
+    val status: AccountStatus,
+    val installationDate: LocalDate,
+    val contractStartDate: LocalDate? = null,
+    val contractEndDate: LocalDate? = null,
+)

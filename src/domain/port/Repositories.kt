@@ -119,6 +119,9 @@ interface StoreRepository {
     fun close(id: String, reason: String, proofOfClosureId: String, at: Instant): Store?
 }
 
+/** Scalar account aggregation (row count + summed MRC) for the manager dashboard. */
+data class AccountAggregate(val accountCount: Int, val totalMrc: Money)
+
 interface AccountRepository {
     fun findById(id: String): Account?
     fun list(storeId: String?, providerId: String?, status: AccountStatus?): List<Account>
@@ -135,6 +138,24 @@ interface AccountRepository {
 
     /** Denormalized accounts joined with store/provider names for the Excel export. */
     fun listForExport(providerId: String?, status: AccountStatus?): List<AccountExportRow>
+
+    /** Account counts grouped by status (dashboard status breakdown). */
+    fun countByStatus(): Map<AccountStatus, Int>
+
+    /** Row count + summed MRC (rate) for [status], or all accounts when null. */
+    fun aggregate(status: AccountStatus?): AccountAggregate
+
+    /** Per-provider (ISP) count + summed MRC for [status], or all when null. */
+    fun aggregateByProvider(status: AccountStatus?): List<ProviderAccountSummary>
+
+    /** Denormalized, keyset-paginated accounts joined with store/provider names. */
+    fun pageWithDetails(
+        storeId: String?,
+        providerId: String?,
+        status: AccountStatus?,
+        cursor: String?,
+        limit: Int,
+    ): CursorPage<AccountListItem>
 
     fun updateStatus(id: String, status: AccountStatus): Account?
 

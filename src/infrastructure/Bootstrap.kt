@@ -151,6 +151,9 @@ fun Application.moduleWith(cfg: AppConfig) {
     val cancelChangeRequest = CancelAccountChangeRequestUseCase(changeRequests, activities, clock, tx)
     val getChangeRequestWithDiff = GetAccountChangeRequestWithDiffUseCase(changeRequests, accounts, tx)
     val listChangeRequests = ListAccountChangeRequestsUseCase(changeRequests, tx)
+    val dashboardSummary = GetDashboardSummaryUseCase(accounts, tx)
+    val listDashboardAccounts = ListDashboardAccountsUseCase(accounts, tx)
+    val listBillingHistory = ListBillingHistoryUseCase(topsheets, tx)
 
     // --- Cross-cutting plugins ---
     configureStatusPages()
@@ -195,6 +198,7 @@ fun Application.moduleWith(cfg: AppConfig) {
                 getTopSheetDetails, approveTopSheet, payTopSheet,
             )
             exportRoutes(exportTopSheet, exportAccounts)
+            dashboardRoutes(dashboardSummary, listDashboardAccounts, listBillingHistory, listStores, exportAccounts)
             attachmentRoutes(presignUpload, presignDownload)
             jobRoutes(expireGrace)
         }

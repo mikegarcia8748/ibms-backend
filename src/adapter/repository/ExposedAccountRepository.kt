@@ -16,9 +16,12 @@ import com.puregoldbe.ibms.adapter.db.toUuidOrNull
 import com.puregoldbe.ibms.domain.model.Account
 import com.puregoldbe.ibms.domain.model.AccountStatus
 import com.puregoldbe.ibms.domain.model.AccountExportRow
+import com.puregoldbe.ibms.domain.model.AccountListItem
 import com.puregoldbe.ibms.domain.model.CursorPage
 import com.puregoldbe.ibms.domain.model.AccountUpsertRequest
+import com.puregoldbe.ibms.domain.model.ProviderAccountSummary
 import com.puregoldbe.ibms.domain.model.StoreStatus
+import com.puregoldbe.ibms.domain.port.AccountAggregate
 import com.puregoldbe.ibms.domain.port.AccountRepository
 import com.puregoldbe.ibms.domain.service.GracePeriodPolicy
 import com.puregoldbe.ibms.domain.valueobject.toMoney
@@ -26,6 +29,7 @@ import com.puregoldbe.ibms.domain.valueobject.toMoneyString
 import org.jetbrains.exposed.v1.core.*
 import org.jetbrains.exposed.v1.core.dao.id.EntityID
 import org.jetbrains.exposed.v1.jdbc.*
+import java.math.BigDecimal
 import java.util.UUID
 
 class ExposedAccountRepository : AccountRepository {
@@ -145,6 +149,62 @@ class ExposedAccountRepository : AccountRepository {
             .orderBy(Stores.branchCode to SortOrder.ASC, Accounts.accountNumber to SortOrder.ASC)
             .map { it.toExportRow() }
 
+    override fun countByStatus(): Map<AccountStatus, Int> {
+        val cnt = Accounts.id.count()
+        return Accounts.select(Accounts.status, cnt)
+            .groupBy(Accounts.status)
+            .associate { it[Accounts.status] to it[cnt].toInt() }
+    }
+
+    override fun aggregate(status: AccountStatus?): AccountAggregate {
+        val cnt = Accounts.id.count()
+        val sum = Accounts.rate.sum()
+        val row = Accounts.select(cnt, sum)
+            .apply { if (status != null) andWhere { Accounts.status eq status } }
+            .single()
+        return AccountAggregate(
+            accountCount = row[cnt].toInt(),
+            totalMrc = (row[sum] ?: BigDecimal.ZERO).toMoneyString(),
+        )
+    }
+
+    override fun aggregateByProvider(status: AccountStatus?): List<ProviderAccountSummary> {
+        val cnt = Accounts.id.count()
+        val sum = Accounts.rate.sum()
+        return (Accounts innerJoin Providers)
+            .select(Providers.id, Providers.name, cnt, sum)
+            .apply { if (status != null) andWhere { Accounts.status eq status } }
+            .groupBy(Providers.id, Providers.name)
+            .orderBy(Providers.name to SortOrder.ASC)
+            .map {
+                ProviderAccountSummary(
+                    providerId = it[Providers.id].value.toString(),
+                    providerName = it[Providers.name],
+                    activeAccountCount = it[cnt].toInt(),
+                    activeMrc = (it[sum] ?: BigDecimal.ZERO).toMoneyString(),
+                )
+            }
+    }
+
+    override fun pageWithDetails(
+        storeId: String?,
+        providerId: String?,
+        status: AccountStatus?,
+        cursor: String?,
+        limit: Int,
+    ): CursorPage<AccountListItem> {
+        val anchor = Accounts.keysetAnchor(Accounts.createdAt, cursor)
+        return (Accounts innerJoin Stores innerJoin Providers).selectAll()
+            .apply { if (storeId != null) andWhere { Accounts.storeId eq storeId.toUuid() } }
+            .apply { if (providerId != null) andWhere { Accounts.providerId eq providerId.toUuid() } }
+            .apply { if (status != null) andWhere { Accounts.status eq status } }
+            .apply { if (anchor != null) andWhere { keysetAfter(Accounts, Accounts.createdAt, anchor) } }
+            .orderBy(Accounts.createdAt to SortOrder.ASC, Accounts.id to SortOrder.ASC)
+            .limit(limit + 1)
+            .map { it.toListItem() }
+            .toCursorPage(limit) { it.id }
+    }
+
     override fun updateStatus(id: String, status: AccountStatus): Account? {
         val uuid = id.toUuidOrNull() ?: return null
         val n = Accounts.update({ Accounts.id eq uuid }) { it[Accounts.status] = status }
@@ -203,6 +263,25 @@ class ExposedAccountRepository : AccountRepository {
         contractStartDate = this[Accounts.contractStartDate]?.kx(),
         contractEndDate = this[Accounts.contractEndDate]?.kx(),
         status = this[Accounts.status],
+    )
+
+    private fun ResultRow.toListItem() = AccountListItem(
+        id = this[Accounts.id].value.toString(),
+        accountNumber = this[Accounts.accountNumber],
+        circuitId = this[Accounts.circuitId],
+        providerId = this[Accounts.providerId].value.toString(),
+        providerName = this[Providers.name],
+        storeId = this[Accounts.storeId].value.toString(),
+        branchCode = this[Stores.branchCode],
+        storeName = this[Stores.name],
+        planName = this[Accounts.planName],
+        serviceType = this[Accounts.serviceType],
+        speed = this[Accounts.speed],
+        rate = this[Accounts.rate].toMoneyString(),
+        status = this[Accounts.status],
+        installationDate = this[Accounts.installationDate].kx(),
+        contractStartDate = this[Accounts.contractStartDate]?.kx(),
+        contractEndDate = this[Accounts.contractEndDate]?.kx(),
     )
 
     private fun ResultRow.toAccount(proofIds: List<String>) = Account(
