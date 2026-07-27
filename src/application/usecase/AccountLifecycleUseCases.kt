@@ -42,11 +42,21 @@ class TransferAccountUseCase(
         idempotent(idempotency, "account.transfer", idem, 201) {
             val actor = actorId ?: throw DomainError.Unauthorized("authentication required")
             val old = accounts.findById(accountId) ?: throw DomainError.NotFound("account $accountId not found")
-            if (old.status == AccountStatus.TRANSFERRED) {
-                throw DomainError.Conflict("account $accountId has already been transferred")
+            if (old.status != AccountStatus.ACTIVE) {
+                throw DomainError.Conflict("only active accounts can be transferred")
+            }
+            if (newStoreId == old.storeId) {
+                throw DomainError.Validation("cannot transfer an account to its current store")
             }
             stores.findById(newStoreId) ?: throw DomainError.Validation("unknown newStoreId $newStoreId")
             if (!attachments.exists(proofId)) throw DomainError.Validation("a valid transfer proofId is required")
+            // Guard the destination against an existing live account with the same identity
+            // (store, provider, account#, circuit). Since we mark the source TRANSFERRED below
+            // — which frees the partial unique index — a bad transfer would otherwise slip past
+            // the DB constraint (same store) or 500 on it (different store) without this check.
+            if (accounts.existsByIdentity(newStoreId, old.providerId, old.accountNumber, old.circuitId)) {
+                throw DomainError.Conflict("an active account with this identity already exists at the destination store")
+            }
 
             accounts.updateStatus(old.id, AccountStatus.TRANSFERRED)
             val moved = accounts.create(
@@ -66,6 +76,7 @@ class TransferAccountUseCase(
                     rate = old.rate,
                     installationDate = old.installationDate,
                     billingPeriodLabel = old.billingPeriodLabel,
+                    isProrated = old.isProrated,
                     subscriptionProofIds = old.subscriptionProofIds,
                 ),
                 createdBy = actor,
@@ -129,9 +140,10 @@ class CancelDeactivationUseCase(
         if (account.status != AccountStatus.TERMINATION_REQUESTED) {
             throw DomainError.Conflict("only accounts in termination_requested status can have deactivation cancelled")
         }
+        if (reason.isBlank()) throw DomainError.Validation("a cancellation reason is required")
         val result = accounts.cancelTerminationRequested(accountId)
             ?: throw DomainError.NotFound("account $accountId not found")
-        activity.record(actorId, "account.deactivation_cancelled", "account", accountId)
+        activity.record(actorId, "account.deactivation_cancelled", "account", accountId, details = reason)
         result
     }
 }

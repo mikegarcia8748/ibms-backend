@@ -68,7 +68,7 @@ class ExportTopSheetExcelUseCase(
         }
         r++
 
-        val headers = listOf("NO.", "STORE CO", "STORE NAME", "CID#", "ACCT#", "MRC", "INVOICE NUMBER")
+        val headers = listOf("NO.", "STORE CO", "STORE NAME", "CID#", "ACCT#", "MRC", "ARREARS", "INVOICE NUMBER")
         sheet.createRow(r++).apply {
             headers.forEachIndexed { i, h -> createCell(i).apply { setCellValue(h); cellStyle = bold } }
         }
@@ -80,15 +80,23 @@ class ExportTopSheetExcelUseCase(
                 createCell(2).setCellValue(line.storeName ?: "")
                 createCell(3).setCellValue(line.circuitId ?: "")
                 createCell(4).setCellValue(line.accountNumber ?: "")
-                createCell(5).setCellValue(line.proratedAmount.toDouble()) // display only; total is BigDecimal
-                createCell(6).setCellValue(ts.invoiceNumber ?: "")
+                createCell(5).setCellValue(line.proratedAmount.toDouble()) // display only; totals are BigDecimal
+                createCell(6).setCellValue(line.arrearsAmount.toDouble()) // display only; totals are BigDecimal
+                createCell(7).setCellValue(ts.invoiceNumber ?: "")
             }
         }
 
-        val total = lines.fold(BigDecimal.ZERO) { acc, l -> acc + BigDecimal(l.proratedAmount) }
+        // The signed document's bottom line must reconcile with the stored invoice total
+        // (TopSheet.totalAmount = Σ proratedAmount + Σ arrearsAmount). Break out the MRC and
+        // arrears subtotals for transparency, then the combined GRAND TOTAL.
+        val mrcTotal = lines.fold(BigDecimal.ZERO) { acc, l -> acc + BigDecimal(l.proratedAmount) }
+        val arrearsTotal = lines.fold(BigDecimal.ZERO) { acc, l -> acc + BigDecimal(l.arrearsAmount) }
+        val grandTotal = mrcTotal + arrearsTotal
         sheet.createRow(r++).apply {
             createCell(0).apply { setCellValue("GRAND TOTAL"); cellStyle = bold }
-            createCell(5).apply { setCellValue(total.toDouble()); cellStyle = bold }
+            createCell(5).apply { setCellValue(mrcTotal.toDouble()); cellStyle = bold }
+            createCell(6).apply { setCellValue(arrearsTotal.toDouble()); cellStyle = bold }
+            createCell(7).apply { setCellValue(grandTotal.toDouble()); cellStyle = bold }
         }
 
         ByteArrayOutputStream().use { out ->
