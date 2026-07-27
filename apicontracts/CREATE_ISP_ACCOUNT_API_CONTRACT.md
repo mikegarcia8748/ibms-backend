@@ -149,7 +149,7 @@ The `isProrated` flag is auto-computed at creation:
 
 1. **Subscription proof is MANDATORY** — unlike the generic `POST /accounts` which treats proof as optional, this ISP endpoint requires a valid uploaded attachment.
 2. **Proration is computed, not user-supplied** — the system determines the proration flag based on provider configuration and installation date.
-3. **Uniqueness** — `(providerId, accountNumber)` must be unique among live (non-transferred, non-terminated) accounts. Same account number is fine with different providers.
+3. **Uniqueness** — account identity `(storeId, providerId, accountNumber, circuitId)` must be unique among live (non-transferred, non-inactive) accounts. The same account number is fine at a different store, with a different provider, or with a different circuit. (Note: for this ISP-create endpoint `circuitId` is required and non-blank; the bulk import allows an empty circuit.)
 4. **Activity log** — records `account.created` on success.
 5. **Transaction** — the entire operation (validation + creation + attachment linking) runs in a single DB transaction.
 6. **Input trimming** — `accountNumber` and `circuitId` are trimmed of leading/trailing whitespace before storage.

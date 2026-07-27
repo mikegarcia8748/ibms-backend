@@ -83,7 +83,11 @@ class AccountChangeRequestSpec : BehaviorSpec({
         return AccountSetup(accountId, providerId, storeId, accNum)
     }
 
-    /** Create a second account sharing an existing provider/store. */
+    /**
+     * Create a second account sharing an existing provider/store. Uses circuit "CIR-001" to match
+     * [setupActiveAccount]'s account, so that (provider, accountNumber, circuit) collides — account
+     * identity is circuit-aware, and a differing circuit would be a distinct account, not a conflict.
+     */
     suspend fun ApplicationTestBuilder.createSecondAccount(
         token: String,
         providerId: String,
@@ -94,7 +98,7 @@ class AccountChangeRequestSpec : BehaviorSpec({
             header(HttpHeaders.Authorization, "Bearer $token")
             contentType(ContentType.Application.Json)
             setBody(
-                """{"accountNumber":"$accountNumber","providerId":"$providerId","storeId":"$storeId","rate":"1500.00","installationDate":"2025-02-01"}""",
+                """{"accountNumber":"$accountNumber","providerId":"$providerId","storeId":"$storeId","rate":"1500.00","installationDate":"2025-02-01","circuitId":"CIR-001"}""",
             )
         }
         acc.status shouldBe HttpStatusCode.Created

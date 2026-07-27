@@ -34,13 +34,13 @@ The XLSX must have a header row with the following column names (column order do
 | `Store Code` | Unique store identifier / branch code. Maps to `store.branchCode`. | `118`, `8041` |
 | `Store Name` | Display name of the store. Maps to `store.name`. | `PUREGOLD PRICE CLUB - QI CENTRAL` |
 | `ISP/Provider` | Provider name. A single file may contain rows for multiple providers (e.g. PLDT, Globe, Radius, Converge). Each unique name is matched or created automatically. | `Globe`, `Converge` |
-| `Account No` | Unique account number per row. Satisfies the `(provider_id, account_number)` unique constraint. | `71214756` |
+| `Account No` | Account number. Part of the account identity `(store_id, provider_id, account_number, circuit_id)`; one account number may recur across stores and circuits. | `71214756` |
 | `Monthly Recurring Amount` | The MRC rate. Must be > 0. Accepts plain numbers (`5598`) and comma-formatted decimals (`2,798.00`). | `5598`, `2,798.00` |
 
 | Optional Column | Description | Example |
 |----------------|-------------|---------|
 | `Service Type` | Account service type (e.g. SDWAN, Broadband, GPON, DIA). | `SDWAN` |
-| `Circuit ID` | Nullable circuit identifier. | `IC-AWZ-2200` |
+| `Circuit ID` | **Optional** circuit identifier. Part of account identity; empty circuit is allowed and the row still imports (an empty circuit at a different store is a distinct account). | `IC-AWZ-2200` |
 | `Start Date` | Installation / contract start date. Mixed formats accepted: `M/d/yyyy`, `MM/dd/yyyy`, `MMM d, yyyy`, Excel serial dates. Nullable. | `11/20/2024`, `45572` |
 
 ### Rows Skipped
@@ -101,7 +101,9 @@ Returns the standard response envelope with a `BulkImportSummary` payload:
 | `storesCreated` | `integer` | Number of new stores created in this import. |
 | `storesReused` | `integer` | Number of stores that already existed (matched by `branchCode` / Store Code) and were reused. |
 | `accountsCreated` | `integer` | Total number of new accounts created in this import (across all providers). |
-| `accountsReused` | `integer` | Total number of accounts that already existed (matched by `providerId` + `accountNumber`) and were reused. |
+| `accountsReused` | `integer` | Total number of accounts that already existed (matched by identity `storeId` + `providerId` + `accountNumber` + `circuitId`) and were reused. |
+| `rowsFailed` | `integer` | Rows that passed validation but threw while committing to the DB. The import is **partial** — valid rows still commit. |
+| `failureReasons` | `string[]` | Human-readable reason (with row number) for each failed row. |
 | `rowsSkipped` | `integer` | Number of rows that were skipped due to validation failures. |
 | `skipReasons` | `string[]` | Human-readable descriptions of why each row was skipped, including the row number (1-indexed). |
 | `totalRows` | `integer` | Total number of data rows processed (excluding the header row). |
@@ -134,7 +136,7 @@ The import is **fully idempotent**:
 
 1. **Providers** — matched by name (read from the `ISP/Provider` column). If a provider with that name already exists, it is reused (no duplicate). A single file may contain rows for multiple providers; each is matched or created independently.
 2. **Stores** — matched by `branchCode` (the Store Code column). If a store with that branch code exists, it is reused. Same store code appearing multiple times (different service types or providers) creates the store once and links multiple accounts.
-3. **Accounts** — matched by `(providerId, accountNumber)`. If an account with the same provider and account number exists, it is reused (no duplicate).
+3. **Accounts** — matched by identity `(storeId, providerId, accountNumber, circuitId)` (empty circuit treated as one no-circuit slot). If an account with the same identity exists, it is reused (no duplicate). The same account number at a different store, or with a different circuit, is a **distinct** account.
 
 Re-uploading the same file will return:
 ```json
@@ -197,7 +199,7 @@ if (data.skipReasons.length > 0) {
 ## Notes for Frontend
 
 - **Do NOT set `Content-Type` header** when sending multipart form data — the browser/runtime sets it automatically with the correct boundary.
-- The import runs in a **single database transaction**: either all valid rows are committed or none are.
+- The import is **partial / row-by-row**: each valid row commits in its own transaction. A row that fails at the DB layer is reported in `rowsFailed` / `failureReasons` without rolling back the rows that already succeeded. (Validation rejections are reported separately in `rowsSkipped` / `skipReasons`.)
 - For large files (172+ rows), the request may take a few seconds. Show a loading indicator.
 - The `skipReasons` array can be displayed to the user as a warning/notification after a successful import.
 - The endpoint is under the `/accounts` route group and requires **sysadmin** role.
