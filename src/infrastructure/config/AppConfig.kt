@@ -58,6 +58,9 @@ data class AppConfig(
     val mailerSendApiKey: String?,
     val mailerSendFromEmail: String?,
     val appUrl: String,
+    /** External RFP-generating system. Null → the simulated gateway is used. */
+    val rfpApiBaseUrl: String?,
+    val rfpApiKey: String?,
 ) {
     companion object {
         private fun env(name: String, default: String? = null): String? =
@@ -93,6 +96,8 @@ data class AppConfig(
             mailerSendApiKey = env("MAILERSEND_API_KEY"),
             mailerSendFromEmail = env("MAILERSEND_FROM_EMAIL"),
             appUrl = env("APP_URL", "http://localhost:8080")!!,
+            rfpApiBaseUrl = env("RFP_API_BASE_URL"),
+            rfpApiKey = env("RFP_API_KEY"),
         )
     }
 }

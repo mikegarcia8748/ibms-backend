@@ -19,7 +19,13 @@ import com.puregoldbe.ibms.domain.port.IdempotencyKeyRepository
 import com.puregoldbe.ibms.domain.port.InvoiceSequenceRepository
 import com.puregoldbe.ibms.domain.port.NewTopSheetLine
 import com.puregoldbe.ibms.domain.port.ProviderRepository
+import com.puregoldbe.ibms.domain.port.RfpGateway
+import com.puregoldbe.ibms.domain.port.RfpGenerationInput
+import com.puregoldbe.ibms.domain.port.RfpLineInput
+import com.puregoldbe.ibms.domain.port.RfpReleaseInput
+import com.puregoldbe.ibms.domain.port.RfpReleaseLine
 import com.puregoldbe.ibms.domain.port.StoreRepository
+import com.puregoldbe.ibms.domain.port.TopSheetLineRfp
 import com.puregoldbe.ibms.domain.port.TopSheetRepository
 import com.puregoldbe.ibms.domain.port.TransactionRunner
 import com.puregoldbe.ibms.domain.service.BILLING_ZONE
@@ -30,7 +36,6 @@ import com.puregoldbe.ibms.domain.valueobject.toMoney
 import com.puregoldbe.ibms.domain.valueobject.toMoneyString
 import kotlinx.datetime.toLocalDateTime
 import java.math.BigDecimal
-import java.math.BigInteger
 
 /** Eligible account + its store + computed proration, shared by preview and compile. */
 internal data class EligibleLine(
@@ -195,29 +200,6 @@ class GetTopSheetDetailsUseCase(
     suspend operator fun invoke(id: String): List<TopSheetDetail> = tx.inTransaction { topsheets.findLines(id) }
 }
 
-/** Finance sign-off: compiled -> approved. */
-class ApproveTopSheetUseCase(
-    private val topsheets: TopSheetRepository,
-    private val activity: ActivityRecorder,
-    private val clock: Clock,
-    private val tx: TransactionRunner,
-) {
-    suspend operator fun invoke(id: String, approverId: String): TopSheet = tx.inTransaction {
-        val ts = topsheets.findById(id) ?: throw DomainError.NotFound("topsheet $id not found")
-        if (ts.status != TopSheetStatus.COMPILED) {
-            throw DomainError.Conflict("only compiled topsheets can be approved (was ${ts.status.name.lowercase()})")
-        }
-        // Segregation of duties: the compiler cannot approve their own topsheet.
-        if (ts.compilerId == approverId) {
-            throw DomainError.Forbidden("you cannot approve a topsheet you compiled")
-        }
-        val approved = topsheets.approve(id, approverId, clock.now())
-            ?: throw DomainError.NotFound("topsheet $id not found")
-        activity.record(approverId, "topsheet.approved", "topsheet", id)
-        approved
-    }
-}
-
 /** Finance payment: approved -> paid, cascading line items to paid. */
 class PayTopSheetUseCase(
     private val topsheets: TopSheetRepository,
@@ -323,8 +305,9 @@ class CreateDraftTopSheetUseCase(
 }
 
 /**
- * Edit a single line in a DRAFT topsheet: set/update the RFP number and/or
- * override the prorated amount. Header totals are recalculated at confirm time.
+ * Edit a single line in a DRAFT topsheet: override the prorated amount. RFP numbers
+ * are assigned by the external system after confirm, not here. Header totals are
+ * recalculated at confirm time.
  */
 class UpdateDraftLineUseCase(
     private val topsheets: TopSheetRepository,
@@ -333,7 +316,6 @@ class UpdateDraftLineUseCase(
     suspend operator fun invoke(
         topsheetId: String,
         lineId: String,
-        rfpNumber: String?,
         proratedAmount: String?,
     ): TopSheetDetail = tx.inTransaction {
         val ts = topsheets.findById(topsheetId)
@@ -341,99 +323,129 @@ class UpdateDraftLineUseCase(
         if (ts.status != TopSheetStatus.DRAFT) {
             throw DomainError.Conflict("only draft topsheets can be edited (was ${ts.status.name.lowercase()})")
         }
-        if (rfpNumber == null && proratedAmount == null) {
-            throw DomainError.Validation("at least one of rfpNumber or proratedAmount must be provided")
+        if (proratedAmount == null || proratedAmount.isBlank()) {
+            throw DomainError.Validation("proratedAmount must be a valid decimal amount")
         }
-        if (rfpNumber != null && !rfpNumber.matches(Regex("^\\d+$"))) {
-            throw DomainError.Validation("rfpNumber must be numeric only")
+        val parsed = try {
+            proratedAmount.toMoney()
+        } catch (e: NumberFormatException) {
+            throw DomainError.Validation("proratedAmount must be a valid decimal amount")
         }
-        if (proratedAmount != null) {
-            if (proratedAmount.isBlank()) {
-                throw DomainError.Validation("proratedAmount must be a valid decimal amount")
-            }
-            val parsed = try {
-                proratedAmount.toMoney()
-            } catch (e: NumberFormatException) {
-                throw DomainError.Validation("proratedAmount must be a valid decimal amount")
-            }
-            if (parsed <= BigDecimal.ZERO) {
-                throw DomainError.Validation("proratedAmount must be greater than zero")
-            }
+        if (parsed <= BigDecimal.ZERO) {
+            throw DomainError.Validation("proratedAmount must be greater than zero")
         }
         topsheets.findLines(topsheetId).find { it.id == lineId }
             ?: throw DomainError.NotFound("line $lineId not found")
-        topsheets.updateLine(lineId, rfpNumber, proratedAmount)
+        topsheets.updateLineAmount(lineId, proratedAmount)
             ?: throw DomainError.NotFound("line $lineId not found")
     }
 }
 
 /**
- * Bulk-assign RFP numbers across a DRAFT topsheet's lines. Store codes
- * ([TopSheetDetail.branchCode]) are numbered in display order — descending, so the top
- * line (highest branch code, matching GET /lines / rfpSortOrder) gets [startRfpNumber]
- * and the numbers grow downward. A sequential RFP number is minted per distinct store
- * code, so every account sharing a store code receives the same RFP number. Storeless
- * lines (null branchCode) are skipped — their RFP stays null for a manual PATCH.
- * [endRfpNumber] is a safety check: the range must cover exactly as many numbers as
- * there are distinct (non-null) store codes. The lines are returned in display order for
- * the Secretary to review before confirming.
+ * Generate RFP numbers for a COMPILED topsheet by calling the external RFP system.
+ * The external system returns an RFP number + a unique key per line; both are
+ * persisted and the topsheet moves COMPILED -> RFP_ASSIGNED. Idempotent: a retry
+ * with the same Idempotency-Key replays the stored result rather than re-calling the
+ * external system (guarding against double-minting on a network retry).
  */
-class AssignRfpNumbersUseCase(
+class GenerateRfpUseCase(
     private val topsheets: TopSheetRepository,
+    private val rfp: RfpGateway,
+    private val idempotency: IdempotencyKeyRepository,
     private val activity: ActivityRecorder,
     private val tx: TransactionRunner,
 ) {
-    private val numeric = Regex("^\\d+$")
-
     suspend operator fun invoke(
         topsheetId: String,
-        startRfpNumber: String,
-        endRfpNumber: String,
         callerId: String,
+        idem: IdempotencyContext? = null,
     ): List<TopSheetDetail> = tx.inTransaction {
+        idempotent(idempotency, "topsheet.generate_rfp", idem, 200) {
+            val ts = topsheets.findById(topsheetId)
+                ?: throw DomainError.NotFound("topsheet $topsheetId not found")
+            if (ts.status != TopSheetStatus.COMPILED) {
+                throw DomainError.Conflict(
+                    "only compiled topsheets can generate RFP numbers (was ${ts.status.name.lowercase()})",
+                )
+            }
+            val lines = topsheets.findLines(topsheetId)
+            if (lines.isEmpty()) {
+                throw DomainError.Conflict("topsheet $topsheetId has no lines to number", "nothing_to_compile")
+            }
+            val result = rfp.generateRfp(
+                RfpGenerationInput(
+                    topsheetId = topsheetId,
+                    billingPeriod = ts.billingPeriod,
+                    providerName = ts.providerName,
+                    batchNumber = ts.batchNumber,
+                    lines = lines.map { line ->
+                        RfpLineInput(
+                            lineId = line.id,
+                            accountId = line.accountId,
+                            accountNumber = line.accountNumber,
+                            branchCode = line.branchCode,
+                            storeName = line.storeName,
+                            amount = line.proratedAmount,
+                        )
+                    },
+                ),
+            )
+            // The external system must return exactly one assignment per line.
+            val knownLineIds = lines.map { it.id }.toSet()
+            val assignments = result.lines
+                .filter { it.lineId in knownLineIds }
+                .map { TopSheetLineRfp(it.lineId, it.rfpNumber, it.uniqueKey) }
+            if (assignments.map { it.lineId }.toSet() != knownLineIds) {
+                throw DomainError.Conflict(
+                    "external RFP system returned ${assignments.size} assignment(s) for ${lines.size} line(s)",
+                    "rfp_incomplete",
+                )
+            }
+            topsheets.assignExternalRfp(topsheetId, assignments)
+                ?: throw DomainError.Conflict("topsheet $topsheetId is no longer compiled")
+            activity.record(callerId, "topsheet.rfp_assigned", "topsheet", topsheetId)
+            // Return in the documented display order (GET /lines / rfpSortOrder).
+            topsheets.findLines(topsheetId)
+        }
+    }
+}
+
+/**
+ * Secretary handoff to finance. Requires an RFP_ASSIGNED topsheet, tells the external
+ * system to move the (open) payment transaction to finance, then transitions
+ * RFP_ASSIGNED -> APPROVED ('approved' now means "released to finance"; there is no
+ * separate Finance-approval step).
+ */
+class ReleaseToFinanceUseCase(
+    private val topsheets: TopSheetRepository,
+    private val rfp: RfpGateway,
+    private val activity: ActivityRecorder,
+    private val clock: Clock,
+    private val tx: TransactionRunner,
+) {
+    suspend operator fun invoke(topsheetId: String, callerId: String): TopSheet = tx.inTransaction {
         val ts = topsheets.findById(topsheetId)
             ?: throw DomainError.NotFound("topsheet $topsheetId not found")
-        if (ts.status != TopSheetStatus.DRAFT) {
-            throw DomainError.Conflict("only draft topsheets can be edited (was ${ts.status.name.lowercase()})")
-        }
-        if (!startRfpNumber.matches(numeric)) {
-            throw DomainError.Validation("startRfpNumber must be numeric only")
-        }
-        if (!endRfpNumber.matches(numeric)) {
-            throw DomainError.Validation("endRfpNumber must be numeric only")
-        }
-        val start = startRfpNumber.toBigInteger()
-        val end = endRfpNumber.toBigInteger()
-        if (end < start) {
-            throw DomainError.Validation("endRfpNumber must be greater than or equal to startRfpNumber")
-        }
-        val lines = topsheets.findLines(topsheetId)
-        if (lines.isEmpty()) {
-            throw DomainError.Conflict("draft topsheet $topsheetId has no lines to number", "nothing_to_compile")
-        }
-        // Number in display order: store code DESCENDING so the top line (highest branch
-        // code, matching GET /lines / rfpSortOrder order) claims [startRfpNumber] and the
-        // numbers grow downward. Storeless lines (null branchCode) can't be numbered by
-        // store code, so they are skipped — their RFP stays null for a manual PATCH.
-        val distinctCodes = lines.mapNotNull { it.branchCode }.distinct().sortedDescending()
-        val provided = end - start + BigInteger.ONE
-        if (provided != distinctCodes.size.toBigInteger()) {
-            throw DomainError.Validation(
-                "RFP range covers $provided number(s) but there are ${distinctCodes.size} store code(s) to number",
+        if (ts.status != TopSheetStatus.RFP_ASSIGNED) {
+            throw DomainError.Conflict(
+                "only rfp_assigned topsheets can be released to finance (was ${ts.status.name.lowercase()})",
             )
         }
-        // Preserve the width of the provided range (e.g. "0100021" stays 7 digits).
-        val width = maxOf(startRfpNumber.length, endRfpNumber.length)
-        val rfpByCode = distinctCodes.withIndex().associate { (i, code) ->
-            code to (start + i.toBigInteger()).toString().padStart(width, '0')
+        val lines = topsheets.findLines(topsheetId)
+        val result = rfp.notifyReleaseToFinance(
+            RfpReleaseInput(
+                topsheetId = topsheetId,
+                invoiceNumber = ts.invoiceNumber,
+                lines = lines.map { RfpReleaseLine(it.id, it.rfpNumber, it.rfpUniqueKey) },
+            ),
+        )
+        if (!result.success) {
+            throw DomainError.Conflict("external RFP system rejected the release", "rfp_release_failed")
         }
-        for (line in lines) {
-            val rfp = line.branchCode?.let { rfpByCode[it] } ?: continue
-            topsheets.updateLine(line.id, rfp, null)
-        }
-        activity.record(callerId, "topsheet.rfp_assigned", "topsheet", topsheetId)
-        // Return in the documented display order (GET /lines / rfpSortOrder).
-        topsheets.findLines(topsheetId)
+        val released = topsheets.releaseToFinance(topsheetId, callerId, clock.now())
+            ?: throw DomainError.Conflict("topsheet $topsheetId is not in rfp_assigned status")
+        activity.record(callerId, "topsheet.released_to_finance", "topsheet", topsheetId)
+        released
     }
 }
 
@@ -499,10 +511,8 @@ class ConfirmTopSheetUseCase(
             if (lines.isEmpty()) {
                 throw DomainError.Conflict("draft topsheet $topsheetId has no lines to confirm", "nothing_to_compile")
             }
-            val missingRfp = lines.filter { it.rfpNumber == null }
-            if (missingRfp.isNotEmpty()) {
-                throw DomainError.Validation("All lines must have an RFP number before confirming")
-            }
+            // RFP numbers are assigned by the external system AFTER confirm
+            // (COMPILED -> generate-rfp -> RFP_ASSIGNED), so they are not required here.
             // Arrears (recovered prior-period partials) must be explicitly acknowledged.
             val arrearsLines = lines.filter { it.arrearsAmount.toMoney() > BigDecimal.ZERO }
             if (arrearsLines.isNotEmpty() && !acknowledgeArrears) {

@@ -1,15 +1,15 @@
 package com.puregoldbe.ibms.adapter.controller
 
 import com.puregoldbe.ibms.adapter.security.authorize
-import com.puregoldbe.ibms.application.usecase.ApproveTopSheetUseCase
-import com.puregoldbe.ibms.application.usecase.AssignRfpNumbersUseCase
 import com.puregoldbe.ibms.application.usecase.ConfirmTopSheetUseCase
 import com.puregoldbe.ibms.application.usecase.CreateDraftTopSheetUseCase
+import com.puregoldbe.ibms.application.usecase.GenerateRfpUseCase
 import com.puregoldbe.ibms.application.usecase.GetTopSheetDetailsUseCase
 import com.puregoldbe.ibms.application.usecase.GetTopSheetUseCase
 import com.puregoldbe.ibms.application.usecase.ListTopSheetsUseCase
 import com.puregoldbe.ibms.application.usecase.PayTopSheetUseCase
 import com.puregoldbe.ibms.application.usecase.PreviewCompilationUseCase
+import com.puregoldbe.ibms.application.usecase.ReleaseToFinanceUseCase
 import com.puregoldbe.ibms.application.usecase.RemoveDraftLineUseCase
 import com.puregoldbe.ibms.application.usecase.UpdateDraftLineUseCase
 import com.puregoldbe.ibms.domain.model.CompileRequest
@@ -24,13 +24,13 @@ fun Route.topSheetRoutes(
     preview: PreviewCompilationUseCase,
     createDraft: CreateDraftTopSheetUseCase,
     updateLine: UpdateDraftLineUseCase,
-    assignRfp: AssignRfpNumbersUseCase,
+    generateRfp: GenerateRfpUseCase,
+    releaseToFinance: ReleaseToFinanceUseCase,
     removeLine: RemoveDraftLineUseCase,
     confirmDraft: ConfirmTopSheetUseCase,
     list: ListTopSheetsUseCase,
     get: GetTopSheetUseCase,
     details: GetTopSheetDetailsUseCase,
-    approve: ApproveTopSheetUseCase,
     pay: PayTopSheetUseCase,
 ) {
     route("/topsheets") {
@@ -63,15 +63,20 @@ fun Route.topSheetRoutes(
             call.ok(details(call.pathId()))
         }
         patch("/{id}/lines/{lineId}") {
-            val caller = call.authorize(UserRole.SECRETARY)
+            call.authorize(UserRole.SECRETARY)
             val req = call.receive<UpdateLineRequest>()
             val lineId = call.parameters["lineId"]!!
-            call.ok(updateLine(call.pathId(), lineId, req.rfpNumber, req.proratedAmount))
+            call.ok(updateLine(call.pathId(), lineId, req.proratedAmount))
         }
-        post("/{id}/assign-rfp") {
+        post("/{id}/generate-rfp") {
             val caller = call.authorize(UserRole.SECRETARY)
-            val req = call.receive<AssignRfpNumbersRequest>()
-            call.ok(assignRfp(call.pathId(), req.startRfpNumber, req.endRfpNumber, caller.userId))
+            val id = call.pathId()
+            val idem = call.idempotencyContext(caller.userId, "topsheet.generate_rfp:$id")
+            call.ok(generateRfp(id, caller.userId, idem))
+        }
+        post("/{id}/release-to-finance") {
+            val caller = call.authorize(UserRole.SECRETARY)
+            call.ok(releaseToFinance(call.pathId(), caller.userId))
         }
         delete("/{id}/lines/{lineId}") {
             val caller = call.authorize(UserRole.SECRETARY)
@@ -92,10 +97,6 @@ fun Route.topSheetRoutes(
         get("/{id}/details") {
             call.authorize()
             call.ok(details(call.pathId()))
-        }
-        post("/{id}/approve") {
-            val caller = call.authorize(UserRole.FINANCE)
-            call.ok(approve(call.pathId(), caller.userId))
         }
         post("/{id}/pay") {
             val caller = call.authorize(UserRole.FINANCE)

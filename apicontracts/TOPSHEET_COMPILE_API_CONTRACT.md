@@ -13,10 +13,11 @@ Base URL: `/` · Auth: `Authorization: Bearer <JWT>` · Role: **secretary** (unl
 | POST | `/topsheets/preview` | Bearer (secretary) | Read-only preview of eligible accounts for a provider/period. No persistence. Unchanged from existing. |
 | POST | `/topsheets/draft` | Bearer (secretary) | Create a DRAFT topsheet with all eligible accounts. **Idempotent**. |
 | GET | `/topsheets/{id}/lines` | Bearer (any) | List all lines in a topsheet, sorted by store branchCode DESC (rfpSortOrder). |
-| PATCH | `/topsheets/{id}/lines/{lineId}` | Bearer (secretary) | Edit a draft line's RFP number and/or prorated amount. |
-| POST | `/topsheets/{id}/assign-rfp` | Bearer (secretary) | Bulk-assign a contiguous RFP number range across a draft's lines, sorted by store code. |
+| PATCH | `/topsheets/{id}/lines/{lineId}` | Bearer (secretary) | Edit a draft line's prorated amount. |
 | DELETE | `/topsheets/{id}/lines/{lineId}` | Bearer (secretary) | Remove a line from a DRAFT topsheet. |
 | POST | `/topsheets/{id}/confirm` | Bearer (secretary) | Re-validate and finalize: DRAFT → COMPILED. Mints invoice number. **Idempotent**. |
+| POST | `/topsheets/{id}/generate-rfp` | Bearer (secretary) | Call the external RFP system to assign an RFP number + unique key per line: COMPILED → RFP_ASSIGNED. **Idempotent**. |
+| POST | `/topsheets/{id}/release-to-finance` | Bearer (secretary) | Notify the external system and hand the batch to finance: RFP_ASSIGNED → APPROVED. |
 
 ---
 
@@ -27,12 +28,16 @@ stateDiagram-v2
     [*] --> preview: POST /topsheets/preview
     preview --> DRAFT: POST /topsheets/draft
     DRAFT --> COMPILED: POST /topsheets/{id}/confirm
-    COMPILED --> APPROVED: POST /topsheets/{id}/approve
-    APPROVED --> PAID: POST /topsheets/{id}/pay
-    DRAFT --> DRAFT: PATCH /{id}/lines/{lineId} (edit RFP, amounts)
-    DRAFT --> DRAFT: POST /{id}/assign-rfp (bulk RFP numbering)
+    COMPILED --> RFP_ASSIGNED: POST /topsheets/{id}/generate-rfp (external RFP system)
+    RFP_ASSIGNED --> APPROVED: POST /topsheets/{id}/release-to-finance (secretary; external status change)
+    APPROVED --> PAID: (future) external paid callback
+    DRAFT --> DRAFT: PATCH /{id}/lines/{lineId} (edit amounts)
     DRAFT --> DRAFT: DELETE /{id}/lines/{lineId} (remove accounts)
 ```
+
+**Note:** `approved` now means "released to finance" — there is no separate Finance
+approval step. `paid` is reserved for a future external paid-callback flow (out of scope
+here). RFP numbers are assigned by the external system **after** confirm.
 
 ---
 
@@ -89,7 +94,7 @@ Creates a DRAFT topsheet with all eligible accounts for the given provider and b
 | `accountCount` | `integer` | Number of line items. |
 | `totalAmount` | `string` | Sum of all line item prorated amounts (decimal string, e.g. `"125000.00"`). |
 | `batchNumber` | `string` | System-generated batch identifier (format: `ACRONYM-YYYYMM-BNNN`). |
-| `status` | `string` | One of: `draft`, `compiled`, `approved`, `paid`. |
+| `status` | `string` | One of: `draft`, `compiled`, `rfp_assigned`, `approved` (released to finance), `paid`. |
 | `compilerId` | `string (UUID)` | User who created the draft. |
 | `compilationDate` | `string (ISO-8601)` | Timestamp of creation. |
 
@@ -159,7 +164,8 @@ Returns all line items for a topsheet, sorted by `rfpSortOrder` ASC (which corre
 | `circuitId` | `string \| null` | Circuit identifier. |
 | `accountNumber` | `string \| null` | Account number. |
 | `accountStatus` | `string \| null` | Account status at snapshot time. |
-| `rfpNumber` | `string \| null` | RFP number (numeric-only free text). `null` until entered by secretary. |
+| `rfpNumber` | `string \| null` | RFP number. `null` until `generate-rfp` assigns it via the external system (after confirm). |
+| `rfpUniqueKey` | `string \| null` | Unique key from the external RFP system, used to link/reconcile the line (e.g. on release-to-finance). `null` until `generate-rfp`. |
 | `rfpSortOrder` | `integer \| null` | Display order (1-based, assigned by store branchCode descending sort). |
 
 ---

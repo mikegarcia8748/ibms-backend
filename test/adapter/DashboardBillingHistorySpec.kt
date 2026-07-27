@@ -3,6 +3,7 @@ package com.puregoldbe.ibms.adapter
 import com.puregoldbe.ibms.domain.model.UserRole
 import com.puregoldbe.ibms.support.signIn
 import com.puregoldbe.ibms.support.testModule
+import com.puregoldbe.ibms.support.uploadPdfProof
 import io.kotest.core.spec.style.BehaviorSpec
 import io.kotest.matchers.shouldBe
 import io.ktor.client.request.*
@@ -61,11 +62,12 @@ class DashboardBillingHistorySpec : BehaviorSpec({
                                 """{"storeType":"puregold","branchCode":"$prefix-$s","name":"$prefix Store","proofOfInstallationId":"$attachmentId"}""",
                             )
                         }.bodyAsText().asJson().data().str("id")
+                        val proofId = uploadPdfProof(adminToken, "subscription_proof")
                         client.post("/accounts") {
                             header(HttpHeaders.Authorization, "Bearer $adminToken")
                             contentType(ContentType.Application.Json)
                             setBody(
-                                """{"accountNumber":"$prefix-$s-1","providerId":"$providerId","storeId":"$storeId","rate":"1000","installationDate":"2020-01-01"}""",
+                                """{"accountNumber":"$prefix-$s-1","providerId":"$providerId","storeId":"$storeId","rate":"1000","installationDate":"2020-01-01","subscriptionProofIds":["$proofId"]}""",
                             )
                         }.status shouldBe HttpStatusCode.Created
                         return providerId
@@ -79,16 +81,8 @@ class DashboardBillingHistorySpec : BehaviorSpec({
                         setBody("""{"providerId":"$provider1","billingPeriod":"$currentPeriod"}""")
                     }.bodyAsText().asJson().data().str("id")
 
-                    val lineId = client.get("/topsheets/$draftId/lines") {
-                        header(HttpHeaders.Authorization, "Bearer $adminToken")
-                    }.bodyAsText().asJson().dataArr().map { it.jsonObject }.first().str("id")
-
-                    client.patch("/topsheets/$draftId/lines/$lineId") {
-                        header(HttpHeaders.Authorization, "Bearer $adminToken")
-                        contentType(ContentType.Application.Json)
-                        setBody("""{"rfpNumber":"010001"}""")
-                    }.status shouldBe HttpStatusCode.OK
-
+                    // Confirm directly — RFP numbers are assigned by the external system
+                    // after confirm, so they are not required to reach COMPILED.
                     client.post("/topsheets/$draftId/confirm") {
                         header(HttpHeaders.Authorization, "Bearer $adminToken")
                     }.status shouldBe HttpStatusCode.OK
