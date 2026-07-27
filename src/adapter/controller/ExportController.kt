@@ -2,7 +2,9 @@ package com.puregoldbe.ibms.adapter.controller
 
 import com.puregoldbe.ibms.adapter.security.authorize
 import com.puregoldbe.ibms.application.usecase.ExportAccountsExcelUseCase
+import com.puregoldbe.ibms.application.usecase.ExportChequePaymentCsvUseCase
 import com.puregoldbe.ibms.application.usecase.ExportTopSheetExcelUseCase
+import com.puregoldbe.ibms.application.usecase.GenerateChequePaymentPdfUseCase
 import com.puregoldbe.ibms.domain.model.UserRole
 import io.ktor.http.*
 import io.ktor.server.response.*
@@ -17,6 +19,8 @@ import io.ktor.server.routing.*
 fun Route.exportRoutes(
     exportTopSheet: ExportTopSheetExcelUseCase,
     exportAccounts: ExportAccountsExcelUseCase,
+    exportChequePdf: GenerateChequePaymentPdfUseCase,
+    exportChequeCsv: ExportChequePaymentCsvUseCase,
 ) {
     get("/exports/topsheet/{id}.xlsx") {
         call.authorize(UserRole.SECRETARY, UserRole.FINANCE)
@@ -45,5 +49,27 @@ fun Route.exportRoutes(
             file.bytes,
             ContentType.parse("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
         )
+    }
+
+    // Cheque Payment Voucher for a paid topsheet. `{id}` is its own path segment
+    // before the literal `/cheque.pdf|.csv` suffix, so call.pathId() reads it directly.
+    get("/exports/topsheet/{id}/cheque.pdf") {
+        call.authorize(UserRole.SECRETARY, UserRole.FINANCE)
+        val file = exportChequePdf(call.pathId())
+        call.response.header(
+            HttpHeaders.ContentDisposition,
+            ContentDisposition.Attachment.withParameter(ContentDisposition.Parameters.FileName, file.fileName).toString(),
+        )
+        call.respondBytes(file.bytes, ContentType.Application.Pdf)
+    }
+
+    get("/exports/topsheet/{id}/cheque.csv") {
+        call.authorize(UserRole.SECRETARY, UserRole.FINANCE)
+        val file = exportChequeCsv(call.pathId())
+        call.response.header(
+            HttpHeaders.ContentDisposition,
+            ContentDisposition.Attachment.withParameter(ContentDisposition.Parameters.FileName, file.fileName).toString(),
+        )
+        call.respondBytes(file.bytes, ContentType.parse("text/csv; charset=UTF-8"))
     }
 }

@@ -72,8 +72,11 @@ interface TopSheetRepository {
      */
     fun releaseToFinance(id: String, releasedById: String, at: Instant): TopSheet?
 
-    /** Move to paid and cascade all line items to paid. */
-    fun pay(id: String, at: Instant): TopSheet?
+    /**
+     * Move APPROVED -> PAID (status-guarded), storing the cheque number used to pay,
+     * and cascade all line items to paid. Returns null if the topsheet was not APPROVED.
+     */
+    fun pay(id: String, chequeNumber: String, at: Instant): TopSheet?
 
     fun createDraft(
         billingPeriod: String,

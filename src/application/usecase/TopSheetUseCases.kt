@@ -207,13 +207,21 @@ class PayTopSheetUseCase(
     private val clock: Clock,
     private val tx: TransactionRunner,
 ) {
-    suspend operator fun invoke(id: String, idem: IdempotencyContext? = null): TopSheet = tx.inTransaction {
-        idempotent(idempotency, "topsheet.pay", idem, 200) {
-            val ts = topsheets.findById(id) ?: throw DomainError.NotFound("topsheet $id not found")
-            if (ts.status != TopSheetStatus.APPROVED) {
-                throw DomainError.Conflict("only approved topsheets can be paid (was ${ts.status.name.lowercase()})")
+    suspend operator fun invoke(
+        id: String,
+        chequeNumber: String,
+        idem: IdempotencyContext? = null,
+    ): TopSheet {
+        val cheque = chequeNumber.trim()
+        if (cheque.isBlank()) throw DomainError.Validation("chequeNumber is required to pay a topsheet")
+        return tx.inTransaction {
+            idempotent(idempotency, "topsheet.pay", idem, 200) {
+                val ts = topsheets.findById(id) ?: throw DomainError.NotFound("topsheet $id not found")
+                if (ts.status != TopSheetStatus.APPROVED) {
+                    throw DomainError.Conflict("only approved topsheets can be paid (was ${ts.status.name.lowercase()})")
+                }
+                topsheets.pay(id, cheque, clock.now()) ?: throw DomainError.NotFound("topsheet $id not found")
             }
-            topsheets.pay(id, clock.now()) ?: throw DomainError.NotFound("topsheet $id not found")
         }
     }
 }

@@ -171,6 +171,7 @@ object TopSheets : UUIDTable("topsheets") {
     val approvedByFinanceId  = reference("approved_by_finance_id", Users).nullable()
     val approvedAt           = timestamp("approved_at").nullable()
     val paidAt               = timestamp("paid_at").nullable()
+    val chequeNumber         = text("cheque_number").nullable()   // V18: cheque used to pay
     val legacyId             = text("legacy_id").uniqueIndex().nullable()
     val compilationDate      = timestamp("compilation_date")
     val createdAt            = timestamp("created_at")

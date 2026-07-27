@@ -101,7 +101,10 @@ fun Route.topSheetRoutes(
         post("/{id}/pay") {
             val caller = call.authorize(UserRole.FINANCE)
             val id = call.pathId()
-            call.ok(pay(id, call.idempotencyContext(caller.userId, "topsheet.pay:$id")))
+            // Receive defensively: a missing/blank body funnels into the use case's
+            // Validation check -> clean 400 rather than a raw deserialization error.
+            val cheque = runCatching { call.receiveNullable<PayTopSheetRequest>() }.getOrNull()?.chequeNumber ?: ""
+            call.ok(pay(id, cheque, call.idempotencyContext(caller.userId, "topsheet.pay:$id:$cheque")))
         }
     }
 }
