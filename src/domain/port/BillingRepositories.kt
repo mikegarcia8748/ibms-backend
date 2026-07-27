@@ -42,6 +42,14 @@ interface TopSheetRepository {
     fun findById(id: String): TopSheet?
     fun list(providerId: String?, billingPeriod: String?, status: TopSheetStatus?): List<TopSheet>
     fun page(providerId: String?, billingPeriod: String?, status: TopSheetStatus?, cursor: String?, limit: Int): CursorPage<TopSheet>
+
+    /**
+     * Billing-history page: like [page] but excludes DRAFT topsheets when [status]
+     * is null (a draft is an in-progress compilation, not billing history). When
+     * [status] is given it filters to exactly that status.
+     */
+    fun pageHistory(providerId: String?, billingPeriod: String?, status: TopSheetStatus?, cursor: String?, limit: Int): CursorPage<TopSheet>
+
     fun findLines(topsheetId: String): List<TopSheetDetail>
 
     /** Account ids already billed in [billingPeriod] (the double-billing guard set). */
