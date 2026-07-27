@@ -18,6 +18,7 @@ import io.mockk.mockk
 import io.mockk.verify
 import kotlinx.datetime.Instant
 
+private const val CHEQUE = "CHQ-0001"
 private val clock = FakeClock(Instant.parse("2026-07-15T08:00:00Z"))
 
 private fun topsheet(status: TopSheetStatus) = TopSheet(
@@ -26,7 +27,7 @@ private fun topsheet(status: TopSheetStatus) = TopSheet(
     status = status, compilerId = "compiler", compilationDate = Instant.fromEpochSeconds(0),
 )
 
-/** Finance payment: APPROVED -> PAID, cascading line items. Proven with mocks (no DB). */
+/** Finance payment: APPROVED -> PAID, recording the cheque + cascading line items. Mocks (no DB). */
 class PayTopSheetUseCaseSpec : BehaviorSpec({
     isolationMode = IsolationMode.InstancePerLeaf
 
@@ -36,16 +37,28 @@ class PayTopSheetUseCaseSpec : BehaviorSpec({
 
     Given("an APPROVED topsheet") {
         val approved = topsheet(TopSheetStatus.APPROVED)
-        val paid = topsheet(TopSheetStatus.PAID).copy(paidAt = clock.now())
+        val paid = topsheet(TopSheetStatus.PAID).copy(paidAt = clock.now(), chequeNumber = CHEQUE)
         every { topsheets.findById("ts1") } returns approved
-        every { topsheets.pay("ts1", clock.now()) } returns paid
+        every { topsheets.pay("ts1", CHEQUE, clock.now()) } returns paid
 
-        When("paying") {
-            val result = useCase("ts1")
+        When("paying with a cheque number") {
+            val result = useCase("ts1", CHEQUE)
 
-            Then("it transitions to PAID") {
+            Then("it transitions to PAID and stores the cheque") {
                 result.status shouldBe TopSheetStatus.PAID
                 result.paidAt shouldBe clock.now()
+                result.chequeNumber shouldBe CHEQUE
+            }
+        }
+    }
+
+    Given("an APPROVED topsheet and a blank cheque number") {
+        every { topsheets.findById("ts1") } returns topsheet(TopSheetStatus.APPROVED)
+
+        When("paying") {
+            Then("it is rejected with Validation before any write") {
+                shouldThrow<DomainError.Validation> { useCase("ts1", "   ") }
+                verify(exactly = 0) { topsheets.pay(any(), any(), any()) }
             }
         }
     }
@@ -55,8 +68,8 @@ class PayTopSheetUseCaseSpec : BehaviorSpec({
 
         When("paying") {
             Then("it is rejected with a Conflict (only APPROVED can be paid)") {
-                shouldThrow<DomainError.Conflict> { useCase("ts1") }
-                verify(exactly = 0) { topsheets.pay(any(), any()) }
+                shouldThrow<DomainError.Conflict> { useCase("ts1", CHEQUE) }
+                verify(exactly = 0) { topsheets.pay(any(), any(), any()) }
             }
         }
     }
@@ -66,7 +79,7 @@ class PayTopSheetUseCaseSpec : BehaviorSpec({
 
         When("paying again") {
             Then("it is rejected with a Conflict") {
-                shouldThrow<DomainError.Conflict> { useCase("ts1") }
+                shouldThrow<DomainError.Conflict> { useCase("ts1", CHEQUE) }
             }
         }
     }
@@ -76,26 +89,26 @@ class PayTopSheetUseCaseSpec : BehaviorSpec({
 
         When("paying") {
             Then("it fails as NotFound") {
-                shouldThrow<DomainError.NotFound> { useCase("nope") }
+                shouldThrow<DomainError.NotFound> { useCase("nope", CHEQUE) }
             }
         }
     }
 
     Given("an Idempotency-Key and two identical pay requests") {
         val approved = topsheet(TopSheetStatus.APPROVED)
-        val paid = topsheet(TopSheetStatus.PAID).copy(paidAt = clock.now())
+        val paid = topsheet(TopSheetStatus.PAID).copy(paidAt = clock.now(), chequeNumber = CHEQUE)
         every { topsheets.findById("ts1") } returns approved
-        every { topsheets.pay("ts1", clock.now()) } returns paid
+        every { topsheets.pay("ts1", CHEQUE, clock.now()) } returns paid
         val ctx = IdempotencyContext(key = "idem-pay-1", requestHash = "hash-1", userId = "finance1")
 
         When("paying twice with the same key") {
-            val first = useCase("ts1", ctx)
-            val second = useCase("ts1", ctx)
+            val first = useCase("ts1", CHEQUE, ctx)
+            val second = useCase("ts1", CHEQUE, ctx)
 
             Then("the second call replays the stored result and pay ran only once") {
                 first.status shouldBe TopSheetStatus.PAID
                 second.status shouldBe TopSheetStatus.PAID
-                verify(exactly = 1) { topsheets.pay(any(), any()) }
+                verify(exactly = 1) { topsheets.pay(any(), any(), any()) }
             }
         }
     }

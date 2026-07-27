@@ -188,6 +188,7 @@ data class TopSheet(
     val approvedByFinanceId: String? = null,
     val approvedAt: Instant? = null,
     val paidAt: Instant? = null,
+    val chequeNumber: String? = null,      // cheque used to pay; set on APPROVED -> PAID
     val compilationDate: Instant,
 )
 

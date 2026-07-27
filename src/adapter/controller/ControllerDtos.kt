@@ -59,3 +59,7 @@ data class AssignRfpNumbersRequest(
     val startRfpNumber: String,
     val endRfpNumber: String,
 )
+
+/** Cheque number recorded by Finance to fully pay (close) a topsheet. */
+@Serializable
+data class PayTopSheetRequest(val chequeNumber: String)

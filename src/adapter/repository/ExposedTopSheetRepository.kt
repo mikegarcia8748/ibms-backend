@@ -148,11 +148,14 @@ class ExposedTopSheetRepository : TopSheetRepository {
         return if (n == 0) null else findById(id)
     }
 
-    override fun pay(id: String, at: Instant): TopSheet? {
+    override fun pay(id: String, chequeNumber: String, at: Instant): TopSheet? {
         val uuid = id.toUuidOrNull() ?: return null
-        val n = TopSheets.update({ TopSheets.id eq uuid }) {
+        // Status-guarded (like assignExternalRfp/releaseToFinance/confirm): only an
+        // APPROVED topsheet transitions to PAID, and only then is the cheque recorded.
+        val n = TopSheets.update({ (TopSheets.id eq uuid) and (TopSheets.status eq TopSheetStatus.APPROVED) }) {
             it[TopSheets.status] = TopSheetStatus.PAID
             it[TopSheets.paidAt] = at.jt()
+            it[TopSheets.chequeNumber] = chequeNumber
         }
         if (n == 0) return null
         TopSheetDetails.update({ TopSheetDetails.topsheetId eq uuid }) {
@@ -223,6 +226,7 @@ class ExposedTopSheetRepository : TopSheetRepository {
         approvedByFinanceId = this[TopSheets.approvedByFinanceId]?.value?.toString(),
         approvedAt = this[TopSheets.approvedAt]?.kx(),
         paidAt = this[TopSheets.paidAt]?.kx(),
+        chequeNumber = this[TopSheets.chequeNumber],
         compilationDate = this[TopSheets.compilationDate].kx(),
     )
 
