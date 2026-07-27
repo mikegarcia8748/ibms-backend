@@ -23,19 +23,16 @@ private fun draftTopsheet(status: TopSheetStatus = TopSheetStatus.DRAFT) = TopSh
     status = status, compilerId = "compiler", compilationDate = Instant.fromEpochSeconds(0),
 )
 
-private fun line(id: String, rfpNumber: String? = null, amount: String = "1000.00") = TopSheetDetail(
+private fun line(id: String, amount: String = "1000.00") = TopSheetDetail(
     id = id, topsheetId = "ts1", accountId = "a1", billingPeriod = "2026-07",
     proratedAmount = amount, fullAmount = "1000.00", status = TopSheetLineStatus.BILLED,
-    rfpNumber = rfpNumber, rfpSortOrder = 1,
+    rfpSortOrder = 1,
 )
 
 /**
- * Edit a single line in a DRAFT topsheet. Proven with mocks (no DB). Covers two fixes
- * applied alongside these specs:
- *  - the line must actually belong to the stated topsheet (previously ungated, allowing
- *    a caller to mutate an arbitrary line as long as the *stated* topsheetId was DRAFT);
- *  - proratedAmount must be a positive, non-blank decimal (previously blank silently
- *    became "0.00" and negative amounts were accepted outright).
+ * Edit a single DRAFT line's prorated amount (RFP is assigned by the external system
+ * after confirm, not here). Proven with mocks (no DB). Covers: the line must belong to
+ * the stated topsheet, and the amount must be a positive, non-blank decimal.
  */
 class UpdateDraftLineUseCaseSpec : BehaviorSpec({
     isolationMode = IsolationMode.InstancePerLeaf
@@ -46,15 +43,14 @@ class UpdateDraftLineUseCaseSpec : BehaviorSpec({
     Given("a DRAFT topsheet with a line belonging to it") {
         every { topsheets.findById("ts1") } returns draftTopsheet()
         every { topsheets.findLines("ts1") } returns listOf(line("l1"))
-        every { topsheets.updateLine("l1", "010001", "1200.00") } returns line("l1", "010001", "1200.00")
+        every { topsheets.updateLineAmount("l1", "1200.00") } returns line("l1", "1200.00")
 
-        When("setting the RFP number and overriding the prorated amount") {
-            val result = useCase("ts1", "l1", "010001", "1200.00")
+        When("overriding the prorated amount") {
+            val result = useCase("ts1", "l1", "1200.00")
 
             Then("the line is updated") {
-                result.rfpNumber shouldBe "010001"
                 result.proratedAmount shouldBe "1200.00"
-                verify(exactly = 1) { topsheets.updateLine("l1", "010001", "1200.00") }
+                verify(exactly = 1) { topsheets.updateLineAmount("l1", "1200.00") }
             }
         }
     }
@@ -64,8 +60,8 @@ class UpdateDraftLineUseCaseSpec : BehaviorSpec({
 
         When("editing a line") {
             Then("it is rejected with a Conflict") {
-                shouldThrow<DomainError.Conflict> { useCase("ts1", "l1", "010001", null) }
-                verify(exactly = 0) { topsheets.updateLine(any(), any(), any()) }
+                shouldThrow<DomainError.Conflict> { useCase("ts1", "l1", "1200.00") }
+                verify(exactly = 0) { topsheets.updateLineAmount(any(), any()) }
             }
         }
     }
@@ -76,31 +72,20 @@ class UpdateDraftLineUseCaseSpec : BehaviorSpec({
 
         When("attempting to edit a foreign lineId under this topsheet's authorization") {
             Then("it is rejected as NotFound instead of silently mutating the other line") {
-                shouldThrow<DomainError.NotFound> { useCase("ts1", "foreign-line", "010001", null) }
-                verify(exactly = 0) { topsheets.updateLine(any(), any(), any()) }
+                shouldThrow<DomainError.NotFound> { useCase("ts1", "foreign-line", "1200.00") }
+                verify(exactly = 0) { topsheets.updateLineAmount(any(), any()) }
             }
         }
     }
 
-    Given("a DRAFT topsheet and a PATCH with neither field provided") {
+    Given("a DRAFT topsheet and a PATCH with no proratedAmount") {
         every { topsheets.findById("ts1") } returns draftTopsheet()
 
-        When("editing with both rfpNumber and proratedAmount null") {
+        When("editing with a null amount") {
             Then("it is rejected with a Validation error instead of a silent no-op 200") {
-                shouldThrow<DomainError.Validation> { useCase("ts1", "l1", null, null) }
+                shouldThrow<DomainError.Validation> { useCase("ts1", "l1", null) }
                 verify(exactly = 0) { topsheets.findLines(any()) }
-                verify(exactly = 0) { topsheets.updateLine(any(), any(), any()) }
-            }
-        }
-    }
-
-    Given("a DRAFT topsheet and a non-numeric RFP number") {
-        every { topsheets.findById("ts1") } returns draftTopsheet()
-
-        When("editing with letters in the RFP number") {
-            Then("it is rejected with a Validation error") {
-                shouldThrow<DomainError.Validation> { useCase("ts1", "l1", "RFP-01", null) }
-                verify(exactly = 0) { topsheets.findLines(any()) }
+                verify(exactly = 0) { topsheets.updateLineAmount(any(), any()) }
             }
         }
     }
@@ -110,7 +95,7 @@ class UpdateDraftLineUseCaseSpec : BehaviorSpec({
 
         When("editing with garbage text as the amount") {
             Then("it is rejected with a Validation error") {
-                shouldThrow<DomainError.Validation> { useCase("ts1", "l1", null, "not-a-number") }
+                shouldThrow<DomainError.Validation> { useCase("ts1", "l1", "not-a-number") }
             }
         }
     }
@@ -120,8 +105,8 @@ class UpdateDraftLineUseCaseSpec : BehaviorSpec({
 
         When("editing with an empty string as the amount") {
             Then("it is rejected with a Validation error instead of silently becoming 0.00") {
-                shouldThrow<DomainError.Validation> { useCase("ts1", "l1", null, "") }
-                verify(exactly = 0) { topsheets.updateLine(any(), any(), any()) }
+                shouldThrow<DomainError.Validation> { useCase("ts1", "l1", "") }
+                verify(exactly = 0) { topsheets.updateLineAmount(any(), any()) }
             }
         }
     }
@@ -131,8 +116,8 @@ class UpdateDraftLineUseCaseSpec : BehaviorSpec({
 
         When("editing with a negative amount") {
             Then("it is rejected with a Validation error") {
-                shouldThrow<DomainError.Validation> { useCase("ts1", "l1", null, "-500.00") }
-                verify(exactly = 0) { topsheets.updateLine(any(), any(), any()) }
+                shouldThrow<DomainError.Validation> { useCase("ts1", "l1", "-500.00") }
+                verify(exactly = 0) { topsheets.updateLineAmount(any(), any()) }
             }
         }
     }
@@ -142,7 +127,7 @@ class UpdateDraftLineUseCaseSpec : BehaviorSpec({
 
         When("editing with an amount of exactly 0.00") {
             Then("it is rejected with a Validation error") {
-                shouldThrow<DomainError.Validation> { useCase("ts1", "l1", null, "0.00") }
+                shouldThrow<DomainError.Validation> { useCase("ts1", "l1", "0.00") }
             }
         }
     }
@@ -152,7 +137,7 @@ class UpdateDraftLineUseCaseSpec : BehaviorSpec({
 
         When("editing a line") {
             Then("it fails as NotFound") {
-                shouldThrow<DomainError.NotFound> { useCase("nope", "l1", "010001", null) }
+                shouldThrow<DomainError.NotFound> { useCase("nope", "l1", "1200.00") }
             }
         }
     }

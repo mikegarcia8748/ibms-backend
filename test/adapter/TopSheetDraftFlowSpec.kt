@@ -16,13 +16,15 @@ import kotlinx.datetime.toLocalDateTime
 import kotlinx.serialization.json.*
 
 /**
- * End-to-end integration spec for the two-phase TopSheet compilation flow (DRAFT →
- * edit lines → CONFIRM), against the real composition root and Testcontainers Postgres.
+ * End-to-end integration spec for the TopSheet lifecycle (DRAFT → edit amounts →
+ * CONFIRM → generate-rfp → release-to-finance), against the real composition root and
+ * Testcontainers Postgres.
  *
- * Proves the full HTTP lifecycle: preview, draft creation, line editing (RFP + amount),
- * validation rejections, line removal, and final confirmation that mints the invoice
- * number. Also pins the invariants: future periods are rejected, RFP-less lines block
- * confirmation, and DRAFT lines do not count as "already billed".
+ * Proves the full HTTP lifecycle: preview, draft creation, prorated-amount editing,
+ * line removal, confirmation that mints the invoice number, external RFP generation
+ * (per line, via the simulated gateway), and the secretary's release-to-finance handoff.
+ * Also pins the invariants: future periods are rejected, RFP is assigned only after
+ * confirm, the state-machine guards hold, and DRAFT lines do not count as "already billed".
  */
 class TopSheetDraftFlowSpec : BehaviorSpec({
 
@@ -43,8 +45,8 @@ class TopSheetDraftFlowSpec : BehaviorSpec({
     }
 
     Given("seeded provider, stores, and accounts") {
-        When("walking the full two-phase draft flow") {
-            Then("preview → draft → edit → confirm all work end-to-end") {
+        When("walking the full lifecycle") {
+            Then("preview → draft → edit → confirm → generate-rfp → release-to-finance all work") {
                 testApplication {
                     application { testModule() }
 
@@ -120,8 +122,8 @@ class TopSheetDraftFlowSpec : BehaviorSpec({
                     batchNumber.endsWith("-B001") shouldBe true
                     val draftId = draftData.str("id")
 
-                    // 3. Lines — the server returns them already sorted by rfpSortOrder
-                    //    (branchCode DESC); no client-side re-sort. rfpSortOrder 1/2/3, null rfpNumber.
+                    // 3. Lines — server returns them sorted by rfpSortOrder (branchCode DESC),
+                    //    with null rfpNumber (RFP is assigned by the external system after confirm).
                     val linesResp = client.get("/topsheets/$draftId/lines") {
                         header(HttpHeaders.Authorization, "Bearer $token")
                     }
@@ -133,61 +135,71 @@ class TopSheetDraftFlowSpec : BehaviorSpec({
                     serverLines[0]["rfpNumber"] shouldBe JsonNull
                     serverLines[1].str("branchCode").startsWith("118") shouldBe true
                     serverLines[1].intOrNull("rfpSortOrder") shouldBe 2
-                    serverLines[1]["rfpNumber"] shouldBe JsonNull
                     serverLines[2].str("branchCode").startsWith("050") shouldBe true
                     serverLines[2].intOrNull("rfpSortOrder") shouldBe 3
-                    serverLines[2]["rfpNumber"] shouldBe JsonNull
 
-                    val line1Id = serverLines[0].str("id")
                     val line2Id = serverLines[1].str("id")
                     val line3Id = serverLines[2].str("id")
 
-                    // 4. Patch RFP number on line 1 → 200
-                    val patch1 = client.patch("/topsheets/$draftId/lines/$line1Id") {
+                    // 4. Patch prorated amount on line 2 → 200
+                    val patch = client.patch("/topsheets/$draftId/lines/$line2Id") {
                         header(HttpHeaders.Authorization, "Bearer $token")
                         contentType(ContentType.Application.Json)
-                        setBody("""{"rfpNumber":"010001"}""")
+                        setBody("""{"proratedAmount":"950.00"}""")
                     }
-                    patch1.status shouldBe HttpStatusCode.OK
-                    patch1.bodyAsText().asJson().data().str("rfpNumber") shouldBe "010001"
+                    patch.status shouldBe HttpStatusCode.OK
+                    patch.bodyAsText().asJson().data().str("proratedAmount") shouldBe "950.00"
 
-                    // 5. Patch amount + RFP on line 2 → 200
-                    val patch2 = client.patch("/topsheets/$draftId/lines/$line2Id") {
+                    // 5. Patch with no editable field → 400
+                    val patchEmpty = client.patch("/topsheets/$draftId/lines/$line2Id") {
                         header(HttpHeaders.Authorization, "Bearer $token")
                         contentType(ContentType.Application.Json)
-                        setBody("""{"rfpNumber":"010002","proratedAmount":"950.00"}""")
+                        setBody("""{}""")
                     }
-                    patch2.status shouldBe HttpStatusCode.OK
-                    val patch2Data = patch2.bodyAsText().asJson().data()
-                    patch2Data.str("rfpNumber") shouldBe "010002"
-                    patch2Data.str("proratedAmount") shouldBe "950.00"
+                    patchEmpty.status shouldBe HttpStatusCode.BadRequest
 
-                    // 6. Non-numeric RFP → 400
-                    val patchBad = client.patch("/topsheets/$draftId/lines/$line3Id") {
-                        header(HttpHeaders.Authorization, "Bearer $token")
-                        contentType(ContentType.Application.Json)
-                        setBody("""{"rfpNumber":"abc"}""")
-                    }
-                    patchBad.status shouldBe HttpStatusCode.BadRequest
-
-                    // 7. Delete line 3 → 204
+                    // 6. Delete line 3 → 204
                     val delete = client.delete("/topsheets/$draftId/lines/$line3Id") {
                         header(HttpHeaders.Authorization, "Bearer $token")
                     }
                     delete.status shouldBe HttpStatusCode.NoContent
 
-                    // 8. Confirm → 200, COMPILED, invoice number present
+                    // 7. Confirm → 200, COMPILED, invoice number present (no RFP required yet)
                     val confirm = client.post("/topsheets/$draftId/confirm") {
                         header(HttpHeaders.Authorization, "Bearer $token")
                     }
                     confirm.status shouldBe HttpStatusCode.OK
                     val confirmData = confirm.bodyAsText().asJson().data()
                     confirmData.str("status") shouldBe "compiled"
-                    val invoiceNumber = confirmData.str("invoiceNumber")
-                    invoiceNumber.startsWith("CONV-") shouldBe true
+                    confirmData.str("invoiceNumber").startsWith("CONV-") shouldBe true
 
-                    // 9. DRAFT lines do NOT count as "already billed" — a draft for a
-                    //    different provider in the same period succeeds.
+                    // 8. Generate RFP via the external (simulated) system → 200, every line
+                    //    now carries an rfpNumber + rfpUniqueKey; topsheet moves to rfp_assigned.
+                    val generate = client.post("/topsheets/$draftId/generate-rfp") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                    }
+                    generate.status shouldBe HttpStatusCode.OK
+                    val rfpLines = generate.bodyAsText().asJson().dataArr().map { it.jsonObject }
+                    rfpLines.size shouldBe 2
+                    rfpLines.forEach { line ->
+                        (line["rfpNumber"] is JsonNull) shouldBe false
+                        (line["rfpUniqueKey"] is JsonNull) shouldBe false
+                    }
+                    rfpLines[0].str("rfpNumber") shouldBe "0100001"
+
+                    client.get("/topsheets/$draftId") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                    }.bodyAsText().asJson().data().str("status") shouldBe "rfp_assigned"
+
+                    // 9. Release to finance → 200, status approved
+                    val release = client.post("/topsheets/$draftId/release-to-finance") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                    }
+                    release.status shouldBe HttpStatusCode.OK
+                    release.bodyAsText().asJson().data().str("status") shouldBe "approved"
+
+                    // 10. DRAFT lines do NOT count as "already billed" — a draft for a
+                    //     different provider in the same period succeeds.
                     val provider2Id = client.post("/providers") {
                         header(HttpHeaders.Authorization, "Bearer $token")
                         contentType(ContentType.Application.Json)
@@ -241,9 +253,9 @@ class TopSheetDraftFlowSpec : BehaviorSpec({
         }
     }
 
-    Given("a draft whose lines are missing RFP numbers") {
-        When("POSTing /topsheets/{id}/confirm") {
-            Then("it is rejected with 400") {
+    Given("a draft that is confirmed before any RFP is assigned") {
+        When("walking the RFP/release state-machine guards") {
+            Then("confirm succeeds without RFP; generate-rfp and release enforce their statuses") {
                 testApplication {
                     application { testModule() }
 
@@ -253,7 +265,7 @@ class TopSheetDraftFlowSpec : BehaviorSpec({
                     val providerId = client.post("/providers") {
                         header(HttpHeaders.Authorization, "Bearer $token")
                         contentType(ContentType.Application.Json)
-                        setBody("""{"name":"NoRfpProv-$s","paymentScheduleDay":5}""")
+                        setBody("""{"name":"GuardProv-$s","paymentScheduleDay":5}""")
                     }.bodyAsText().asJson().data().str("id")
 
                     val attachmentId = client.post("/attachments/presign/upload") {
@@ -266,7 +278,7 @@ class TopSheetDraftFlowSpec : BehaviorSpec({
                         header(HttpHeaders.Authorization, "Bearer $token")
                         contentType(ContentType.Application.Json)
                         setBody(
-                            """{"storeType":"puregold","branchCode":"NR-$s","name":"NoRfp Store","proofOfInstallationId":"$attachmentId"}""",
+                            """{"storeType":"puregold","branchCode":"GD-$s","name":"Guard Store","proofOfInstallationId":"$attachmentId"}""",
                         )
                     }.bodyAsText().asJson().data().str("id")
 
@@ -275,7 +287,7 @@ class TopSheetDraftFlowSpec : BehaviorSpec({
                         header(HttpHeaders.Authorization, "Bearer $token")
                         contentType(ContentType.Application.Json)
                         setBody(
-                            """{"accountNumber":"nr-$s-1","providerId":"$providerId","storeId":"$storeId","rate":"1000","installationDate":"2020-01-01","subscriptionProofIds":["$proofId3"]}""",
+                            """{"accountNumber":"gd-$s-1","providerId":"$providerId","storeId":"$storeId","rate":"1000","installationDate":"2020-01-01","subscriptionProofIds":["$proofId3"]}""",
                         )
                     }.status shouldBe HttpStatusCode.Created
 
@@ -285,10 +297,30 @@ class TopSheetDraftFlowSpec : BehaviorSpec({
                         setBody("""{"providerId":"$providerId","billingPeriod":"$currentPeriod"}""")
                     }.bodyAsText().asJson().data().str("id")
 
+                    // generate-rfp on a DRAFT (not yet compiled) → 409
+                    client.post("/topsheets/$draftId/generate-rfp") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                    }.status shouldBe HttpStatusCode.Conflict
+
+                    // Confirm now succeeds even though no line has an RFP number → COMPILED.
                     val confirm = client.post("/topsheets/$draftId/confirm") {
                         header(HttpHeaders.Authorization, "Bearer $token")
                     }
-                    confirm.status shouldBe HttpStatusCode.BadRequest
+                    confirm.status shouldBe HttpStatusCode.OK
+                    confirm.bodyAsText().asJson().data().str("status") shouldBe "compiled"
+
+                    // release-to-finance before generate-rfp → 409 (needs rfp_assigned)
+                    client.post("/topsheets/$draftId/release-to-finance") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                    }.status shouldBe HttpStatusCode.Conflict
+
+                    // generate-rfp → 200 rfp_assigned, then release → 200 approved.
+                    client.post("/topsheets/$draftId/generate-rfp") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                    }.status shouldBe HttpStatusCode.OK
+                    client.post("/topsheets/$draftId/release-to-finance") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                    }.bodyAsText().asJson().data().str("status") shouldBe "approved"
                 }
             }
         }
@@ -410,88 +442,6 @@ class TopSheetDraftFlowSpec : BehaviorSpec({
                     second.status shouldBe HttpStatusCode.Conflict
                     second.bodyAsText().asJson().str("message") shouldBe
                         "a draft already exists for this provider/period"
-                }
-            }
-        }
-    }
-
-    Given("a DRAFT topsheet with two stores, one shared by two accounts") {
-        When("bulk-assigning an RFP range via /assign-rfp") {
-            Then("the highest store code claims startRfpNumber and shared codes share a number") {
-                testApplication {
-                    application { testModule() }
-
-                    val token = signIn(UserRole.SYSADMIN).token
-                    val s = System.nanoTime().toString()
-
-                    val providerId = client.post("/providers") {
-                        header(HttpHeaders.Authorization, "Bearer $token")
-                        contentType(ContentType.Application.Json)
-                        setBody("""{"name":"RfpProv-$s","paymentScheduleDay":15}""")
-                    }.bodyAsText().asJson().data().str("id")
-
-                    val attachmentId = client.post("/attachments/presign/upload") {
-                        header(HttpHeaders.Authorization, "Bearer $token")
-                        contentType(ContentType.Application.Json)
-                        setBody("""{"fileName":"p.txt","contentType":"text/plain","purpose":"installation_proof"}""")
-                    }.bodyAsText().asJson().data().str("attachmentId")
-
-                    suspend fun createStore(code: String) = client.post("/stores") {
-                        header(HttpHeaders.Authorization, "Bearer $token")
-                        contentType(ContentType.Application.Json)
-                        setBody(
-                            """{"storeType":"puregold","branchCode":"$code","name":"Store $code","proofOfInstallationId":"$attachmentId"}""",
-                        )
-                    }.bodyAsText().asJson().data().str("id")
-
-                    // "220…" sorts above "210…" lexicographically, so 220 is the top (highest) code.
-                    val storeHigh = createStore("220-$s")
-                    val storeLow = createStore("210-$s")
-
-                    suspend fun createAccount(num: String, storeId: String): HttpResponse {
-                        val proofId6 = uploadPdfProof(token, "subscription_proof")
-                        return client.post("/accounts") {
-                            header(HttpHeaders.Authorization, "Bearer $token")
-                            contentType(ContentType.Application.Json)
-                            setBody(
-                                """{"accountNumber":"$num","providerId":"$providerId","storeId":"$storeId","rate":"1000","installationDate":"2020-01-01","subscriptionProofIds":["$proofId6"]}""",
-                            )
-                        }
-                    }
-                    createAccount("r-$s-1", storeHigh)
-                    createAccount("r-$s-2", storeHigh)
-                    createAccount("r-$s-3", storeLow)
-
-                    val draftId = client.post("/topsheets/draft") {
-                        header(HttpHeaders.Authorization, "Bearer $token")
-                        contentType(ContentType.Application.Json)
-                        setBody("""{"providerId":"$providerId","billingPeriod":"$currentPeriod"}""")
-                    }.bodyAsText().asJson().data().str("id")
-
-                    // Range covers 3 numbers but there are only 2 distinct store codes -> 400.
-                    val mismatch = client.post("/topsheets/$draftId/assign-rfp") {
-                        header(HttpHeaders.Authorization, "Bearer $token")
-                        contentType(ContentType.Application.Json)
-                        setBody("""{"startRfpNumber":"0100021","endRfpNumber":"0100023"}""")
-                    }
-                    mismatch.status shouldBe HttpStatusCode.BadRequest
-
-                    // Correct range: 2 numbers for 2 distinct store codes.
-                    val assign = client.post("/topsheets/$draftId/assign-rfp") {
-                        header(HttpHeaders.Authorization, "Bearer $token")
-                        contentType(ContentType.Application.Json)
-                        setBody("""{"startRfpNumber":"0100021","endRfpNumber":"0100022"}""")
-                    }
-                    assign.status shouldBe HttpStatusCode.OK
-                    val assigned = assign.bodyAsText().asJson().dataArr().map { it.jsonObject }
-                    assigned.size shouldBe 3
-                    // Display order (rfpSortOrder): the two 220 accounts first (sharing 0100021), then 210.
-                    assigned[0].str("branchCode").startsWith("220") shouldBe true
-                    assigned[0].str("rfpNumber") shouldBe "0100021"
-                    assigned[1].str("branchCode").startsWith("220") shouldBe true
-                    assigned[1].str("rfpNumber") shouldBe "0100021"
-                    assigned[2].str("branchCode").startsWith("210") shouldBe true
-                    assigned[2].str("rfpNumber") shouldBe "0100022"
                 }
             }
         }

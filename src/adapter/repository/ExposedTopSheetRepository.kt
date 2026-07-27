@@ -18,6 +18,7 @@ import com.puregoldbe.ibms.domain.model.TopSheetDetail
 import com.puregoldbe.ibms.domain.model.TopSheetLineStatus
 import com.puregoldbe.ibms.domain.model.TopSheetStatus
 import com.puregoldbe.ibms.domain.port.NewTopSheetLine
+import com.puregoldbe.ibms.domain.port.TopSheetLineRfp
 import com.puregoldbe.ibms.domain.port.TopSheetRepository
 import com.puregoldbe.ibms.domain.valueobject.toMoney
 import com.puregoldbe.ibms.domain.valueobject.toMoneyString
@@ -138,11 +139,30 @@ class ExposedTopSheetRepository : TopSheetRepository {
         return out
     }
 
-    override fun approve(id: String, approverId: String, at: Instant): TopSheet? {
+    override fun assignExternalRfp(topsheetId: String, lines: List<TopSheetLineRfp>): TopSheet? {
+        val uuid = topsheetId.toUuidOrNull() ?: return null
+        // Guard the header transition first so a non-COMPILED topsheet writes nothing.
+        val n = TopSheets.update({ (TopSheets.id eq uuid) and (TopSheets.status eq TopSheetStatus.COMPILED) }) {
+            it[TopSheets.status] = TopSheetStatus.RFP_ASSIGNED
+        }
+        if (n == 0) return null
+        for (line in lines) {
+            val lineUuid = line.lineId.toUuidOrNull() ?: continue
+            TopSheetDetails.update({ (TopSheetDetails.id eq lineUuid) and (TopSheetDetails.topsheetId eq uuid) }) {
+                it[TopSheetDetails.rfpNumber] = line.rfpNumber
+                it[TopSheetDetails.rfpUniqueKey] = line.uniqueKey
+            }
+        }
+        return findById(topsheetId)
+    }
+
+    override fun releaseToFinance(id: String, releasedById: String, at: Instant): TopSheet? {
         val uuid = id.toUuidOrNull() ?: return null
-        val n = TopSheets.update({ TopSheets.id eq uuid }) {
+        // 'approved' now means "released to finance"; reuse approvedByFinanceId/approvedAt
+        // to record who released it and when.
+        val n = TopSheets.update({ (TopSheets.id eq uuid) and (TopSheets.status eq TopSheetStatus.RFP_ASSIGNED) }) {
             it[TopSheets.status] = TopSheetStatus.APPROVED
-            it[TopSheets.approvedByFinanceId] = EntityID(approverId.toUuid(), Users)
+            it[TopSheets.approvedByFinanceId] = EntityID(releasedById.toUuid(), Users)
             it[TopSheets.approvedAt] = at.jt()
         }
         return if (n == 0) null else findById(id)
@@ -186,11 +206,10 @@ class ExposedTopSheetRepository : TopSheetRepository {
         return findById(id.toString())!!
     }
 
-    override fun updateLine(detailId: String, rfpNumber: String?, proratedAmount: String?): TopSheetDetail? {
+    override fun updateLineAmount(detailId: String, proratedAmount: String): TopSheetDetail? {
         val uuid = detailId.toUuidOrNull() ?: return null
         val n = TopSheetDetails.update({ TopSheetDetails.id eq uuid }) {
-            if (rfpNumber != null) it[TopSheetDetails.rfpNumber] = rfpNumber
-            if (proratedAmount != null) it[TopSheetDetails.proratedAmount] = proratedAmount.toMoney()
+            it[TopSheetDetails.proratedAmount] = proratedAmount.toMoney()
         }
         if (n == 0) return null
         return TopSheetDetails.selectAll().where { TopSheetDetails.id eq uuid }.map { it.toDetail() }.singleOrNull()
@@ -244,6 +263,7 @@ class ExposedTopSheetRepository : TopSheetRepository {
         accountNumber = this[TopSheetDetails.accountNumber],
         accountStatus = this[TopSheetDetails.accountStatus],
         rfpNumber = this[TopSheetDetails.rfpNumber],
+        rfpUniqueKey = this[TopSheetDetails.rfpUniqueKey],
         rfpSortOrder = this[TopSheetDetails.rfpSortOrder]?.toInt(),
         arrearsAmount = this[TopSheetDetails.arrearsAmount].toMoneyString(),
         arrearsPeriods = this[TopSheetDetails.arrearsPeriods]

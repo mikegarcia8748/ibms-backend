@@ -50,7 +50,7 @@ private fun acct(id: String, status: AccountStatus = AccountStatus.ACTIVE) = Acc
     status = status, createdAt = Instant.fromEpochSeconds(0),
 )
 
-/** A draft line; [rfpNumber] is null until the Secretary fills it in. */
+/** A draft line; [rfpNumber] is null until the external system assigns it after confirm. */
 private fun line(
     id: String,
     accountId: String,
@@ -109,16 +109,23 @@ class ConfirmTopSheetUseCaseSpec : BehaviorSpec({
         }
     }
 
-    Given("a DRAFT topsheet where some lines are missing RFP numbers") {
+    Given("a DRAFT topsheet with no RFP numbers (they are assigned only after confirm)") {
         every { topsheets.findById("ts1") } returns draftTopsheet
         every { topsheets.findLines("ts1") } returns listOf(
-            line("l1", "a1", null), line("l2", "a2", "010002"),
+            line("l1", "a1", null), line("l2", "a2", null),
         )
+        every { accounts.list(null, "p1", null) } returns listOf(acct("a1"), acct("a2"))
+        every { topsheets.billedAccountIds("2026-07") } returns emptySet()
+        every { sequences.nextValue("p1") } returns 1
+        every { sequences.prefixOf("p1") } returns "CONV-"
+        every { topsheets.confirm(any(), any(), any(), any()) } returns compiledTopsheet
 
         When("confirming") {
-            Then("it is rejected with a Validation error") {
-                shouldThrow<DomainError.Validation> { useCase("ts1", "confirmer") }
-                verify(exactly = 0) { sequences.nextValue(any()) }
+            val result = useCase("ts1", "confirmer")
+
+            Then("it still compiles — RFP is no longer required at confirm time") {
+                result.status shouldBe TopSheetStatus.COMPILED
+                verify(exactly = 1) { topsheets.confirm("ts1", "CONV-202607-0001", 2, "2000.00") }
             }
         }
     }

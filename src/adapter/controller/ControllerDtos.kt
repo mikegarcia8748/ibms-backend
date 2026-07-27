@@ -45,7 +45,6 @@ data class ProviderImportSummary(
 
 @Serializable
 data class UpdateLineRequest(
-    val rfpNumber: String? = null,
     val proratedAmount: String? = null,
 )
 
