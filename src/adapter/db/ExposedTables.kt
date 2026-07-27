@@ -132,9 +132,11 @@ object Accounts : UUIDTable("accounts") {
     val legacyId                = text("legacy_id").uniqueIndex().nullable()
     val createdAt               = timestamp("created_at")
     val updatedAt               = timestamp("updated_at")
-    // Uniqueness of (provider_id, account_number) is enforced in the DB by a
-    // PARTIAL unique index (active accounts only) — see V4 migration. Flyway owns
-    // DDL, so it is not declared here.
+    // Account identity = (store_id, provider_id, account_number, COALESCE(circuit_id, ''))
+    // enforced in the DB by a PARTIAL unique index (live accounts only): one account
+    // number may recur across stores and carry many circuits, and circuit may be empty.
+    // See V16 migration (lineage: V4/V14 account_number-only → V15 added circuit →
+    // V16 added store). Flyway owns DDL, so it is not declared here.
 }
 
 object AccountAttachments : Table("account_attachments") {

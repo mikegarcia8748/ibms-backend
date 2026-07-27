@@ -4,6 +4,7 @@ import com.puregoldbe.ibms.domain.model.UserRole
 import com.puregoldbe.ibms.support.signIn
 import com.puregoldbe.ibms.support.testModule
 import io.kotest.core.spec.style.BehaviorSpec
+import io.kotest.matchers.ints.shouldBeGreaterThanOrEqual
 import io.kotest.matchers.shouldBe
 import io.ktor.client.request.*
 import io.ktor.client.request.forms.MultiPartFormDataContent
@@ -60,7 +61,8 @@ class BulkImportSpec : BehaviorSpec({
             r.createCell(6).setCellValue("2/8/2022")
             r.createCell(7).setCellValue("2,798.00")
 
-            // Row 3: store 8041, Globe, GPON, no circuit ID, no start date
+            // Row 3: store 8041, Globe, GPON, NO circuit ID, no start date
+            // (exercises both the empty-circuit import path and the missing-date notes path)
             r = sheet.createRow(3)
             r.createCell(0).setCellValue("8041")
             r.createCell(1).setCellValue("PUREGOLD - BRANCH 2")
@@ -113,6 +115,15 @@ class BulkImportSpec : BehaviorSpec({
             r.createCell(4).setCellValue("ACC008")
             r.createCell(7).setCellValue(1000.0)
 
+            // Row 9: no Circuit ID -> still imports (circuit is optional; store scopes identity)
+            r = sheet.createRow(9)
+            r.createCell(0).setCellValue("8042")
+            r.createCell(1).setCellValue("PUREGOLD - BRANCH 3")
+            r.createCell(2).setCellValue("Globe")
+            r.createCell(3).setCellValue("GPON")
+            r.createCell(4).setCellValue("ACC009")
+            r.createCell(7).setCellValue(1500.0)
+
             val out = ByteArrayOutputStream()
             wb.write(out)
             return out.toByteArray()
@@ -141,6 +152,38 @@ class BulkImportSpec : BehaviorSpec({
             r.createCell(5).setCellValue("IC-RAD-001")
             r.createCell(6).setCellValue("6/1/2025")
             r.createCell(7).setCellValue(2500.0)
+
+            val out = ByteArrayOutputStream()
+            wb.write(out)
+            return out.toByteArray()
+        }
+    }
+
+    /**
+     * Builds an XLSX with the standard header and the given data rows. Each row is a list of up to 8
+     * cell values in column order (Store Code, Store Name, ISP/Provider, Service Type, Account No,
+     * Circuit ID, Start Date, Monthly Recurring Amount); a null value leaves that cell empty, a Double
+     * writes a numeric cell, anything else writes a string cell.
+     */
+    fun buildXlsx(rows: List<List<Any?>>): ByteArray {
+        XSSFWorkbook().use { wb ->
+            val sheet = wb.createSheet("Sheet1")
+            val header = sheet.createRow(0)
+            listOf(
+                "Store Code", "Store Name", "ISP/Provider", "Service Type",
+                "Account No", "Circuit ID", "Start Date", "Monthly Recurring Amount",
+            ).forEachIndexed { i, name -> header.createCell(i).setCellValue(name) }
+
+            rows.forEachIndexed { rIdx, cells ->
+                val r = sheet.createRow(rIdx + 1)
+                cells.forEachIndexed { cIdx, value ->
+                    when (value) {
+                        null -> {}
+                        is Double -> r.createCell(cIdx).setCellValue(value)
+                        else -> r.createCell(cIdx).setCellValue(value.toString())
+                    }
+                }
+            }
 
             val out = ByteArrayOutputStream()
             wb.write(out)
@@ -187,10 +230,11 @@ class BulkImportSpec : BehaviorSpec({
                     converge["accountsCreated"]!!.jsonPrimitive.int shouldBe 1
                     converge["accountsReused"]!!.jsonPrimitive.int shouldBe 0
 
+                    // Globe: ACC001, ACC002, ACC003 (empty circuit), ACC009 (empty circuit) = 4.
                     val globe = providers[1].jsonObject
                     globe["name"]!!.jsonPrimitive.content shouldBe "Globe"
                     globe["created"]!!.jsonPrimitive.boolean shouldBe true
-                    globe["accountsCreated"]!!.jsonPrimitive.int shouldBe 3
+                    globe["accountsCreated"]!!.jsonPrimitive.int shouldBe 4
                     globe["accountsReused"]!!.jsonPrimitive.int shouldBe 0
 
                     val pldt = providers[2].jsonObject
@@ -199,12 +243,15 @@ class BulkImportSpec : BehaviorSpec({
                     pldt["accountsCreated"]!!.jsonPrimitive.int shouldBe 1
                     pldt["accountsReused"]!!.jsonPrimitive.int shouldBe 0
 
-                    data["storesCreated"]!!.jsonPrimitive.int shouldBe 4
+                    // Stores 118, 8041, 200, 201, 8042 = 5.
+                    data["storesCreated"]!!.jsonPrimitive.int shouldBe 5
                     data["storesReused"]!!.jsonPrimitive.int shouldBe 0
-                    data["accountsCreated"]!!.jsonPrimitive.int shouldBe 5
+                    data["accountsCreated"]!!.jsonPrimitive.int shouldBe 6
                     data["accountsReused"]!!.jsonPrimitive.int shouldBe 0
+                    // 3 skips: missing store code, zero MRC, blank provider. (Empty circuit is NOT a skip.)
                     data["rowsSkipped"]!!.jsonPrimitive.int shouldBe 3
-                    data["totalRows"]!!.jsonPrimitive.int shouldBe 8
+                    data["totalRows"]!!.jsonPrimitive.int shouldBe 9
+                    data["rowsFailed"]!!.jsonPrimitive.int shouldBe 0
                 }
             }
         }
@@ -234,16 +281,17 @@ class BulkImportSpec : BehaviorSpec({
                         p.jsonObject["accountsCreated"]!!.jsonPrimitive.int shouldBe 0
                     }
 
-                    // Converge: 1 reused, Globe: 3 reused, PLDT: 1 reused
+                    // Converge: 1 reused, Globe: 4 reused, PLDT: 1 reused
                     providers2[0].jsonObject["accountsReused"]!!.jsonPrimitive.int shouldBe 1
-                    providers2[1].jsonObject["accountsReused"]!!.jsonPrimitive.int shouldBe 3
+                    providers2[1].jsonObject["accountsReused"]!!.jsonPrimitive.int shouldBe 4
                     providers2[2].jsonObject["accountsReused"]!!.jsonPrimitive.int shouldBe 1
 
                     data2["storesCreated"]!!.jsonPrimitive.int shouldBe 0
-                    data2["storesReused"]!!.jsonPrimitive.int shouldBe 4
+                    data2["storesReused"]!!.jsonPrimitive.int shouldBe 5
                     data2["accountsCreated"]!!.jsonPrimitive.int shouldBe 0
-                    data2["accountsReused"]!!.jsonPrimitive.int shouldBe 5
+                    data2["accountsReused"]!!.jsonPrimitive.int shouldBe 6
                     data2["rowsSkipped"]!!.jsonPrimitive.int shouldBe 3
+                    data2["rowsFailed"]!!.jsonPrimitive.int shouldBe 0
                 }
             }
         }
@@ -272,6 +320,136 @@ class BulkImportSpec : BehaviorSpec({
                     data["accountsCreated"]!!.jsonPrimitive.int shouldBe 1
                     data["rowsSkipped"]!!.jsonPrimitive.int shouldBe 0
                     data["totalRows"]!!.jsonPrimitive.int shouldBe 1
+                }
+            }
+        }
+    }
+
+    Given("a sysadmin and an XLSX where one account number carries multiple distinct circuits") {
+        When("uploading it, then re-uploading the same file") {
+            Then("each distinct circuit becomes its own account and the re-upload reuses them") {
+                testApplication {
+                    application { testModule() }
+                    val token = signIn(UserRole.SYSADMIN).token
+
+                    // Same store + provider + account number; three different circuit IDs. Before the fix,
+                    // only the first row imported (1 created, 2 reused).
+                    val xlsx = buildXlsx(
+                        listOf(
+                            listOf("CS-777", "CIRCUIT SHARE STORE", "CircuitShareISP", "SDWAN", "CS-ACC-777", "CID-A", "1/1/2025", 1000.0),
+                            listOf("CS-777", "CIRCUIT SHARE STORE", "CircuitShareISP", "SDWAN", "CS-ACC-777", "CID-B", "1/1/2025", 1000.0),
+                            listOf("CS-777", "CIRCUIT SHARE STORE", "CircuitShareISP", "SDWAN", "CS-ACC-777", "CID-C", "1/1/2025", 1000.0),
+                        ),
+                    )
+
+                    val resp = uploadXlsx(token, xlsx)
+                    resp.status shouldBe HttpStatusCode.OK
+                    val data = resp.bodyAsText().asJson().data()
+                    data["accountsCreated"]!!.jsonPrimitive.int shouldBe 3
+                    data["accountsReused"]!!.jsonPrimitive.int shouldBe 0
+                    data["storesCreated"]!!.jsonPrimitive.int shouldBe 1
+                    data["rowsSkipped"]!!.jsonPrimitive.int shouldBe 0
+                    data["rowsFailed"]!!.jsonPrimitive.int shouldBe 0
+                    data["totalRows"]!!.jsonPrimitive.int shouldBe 3
+
+                    val data2 = uploadXlsx(token, xlsx).bodyAsText().asJson().data()
+                    data2["accountsCreated"]!!.jsonPrimitive.int shouldBe 0
+                    data2["accountsReused"]!!.jsonPrimitive.int shouldBe 3
+                    data2["storesReused"]!!.jsonPrimitive.int shouldBe 1
+                    data2["rowsFailed"]!!.jsonPrimitive.int shouldBe 0
+                }
+            }
+        }
+    }
+
+    Given("a sysadmin and an XLSX where the same account number + empty circuit appears at different stores") {
+        When("uploading it") {
+            Then("store scopes identity: each store gets its own account, and a same-store duplicate is reused") {
+                testApplication {
+                    application { testModule() }
+                    val token = signIn(UserRole.SYSADMIN).token
+
+                    // Same provider + account number + EMPTY circuit; rows 1 & 2 differ only by store (so they
+                    // are distinct accounts); row 3 duplicates row 1 exactly (so it dedupes).
+                    val xlsx = buildXlsx(
+                        listOf(
+                            listOf("SS-STORE-A", "STORE A", "StoreScopeISP", "SDWAN", "SS-ACC-1", null, "1/1/2025", 1000.0),
+                            listOf("SS-STORE-B", "STORE B", "StoreScopeISP", "SDWAN", "SS-ACC-1", null, "1/1/2025", 1000.0),
+                            listOf("SS-STORE-A", "STORE A", "StoreScopeISP", "SDWAN", "SS-ACC-1", null, "1/1/2025", 1000.0),
+                        ),
+                    )
+
+                    val resp = uploadXlsx(token, xlsx)
+                    resp.status shouldBe HttpStatusCode.OK
+                    val data = resp.bodyAsText().asJson().data()
+                    // Row 1 (store A) + row 2 (store B) = 2 distinct accounts; row 3 = same-store dup -> reused.
+                    data["accountsCreated"]!!.jsonPrimitive.int shouldBe 2
+                    data["accountsReused"]!!.jsonPrimitive.int shouldBe 1
+                    data["storesCreated"]!!.jsonPrimitive.int shouldBe 2
+                    data["rowsSkipped"]!!.jsonPrimitive.int shouldBe 0
+                    data["rowsFailed"]!!.jsonPrimitive.int shouldBe 0
+                    data["totalRows"]!!.jsonPrimitive.int shouldBe 3
+                }
+            }
+        }
+    }
+
+    Given("a sysadmin and an XLSX containing a malformed Monthly Recurring Amount") {
+        When("uploading it") {
+            Then("the bad row is skipped-and-reported and valid rows still import (no 500 / rollback)") {
+                testApplication {
+                    application { testModule() }
+                    val token = signIn(UserRole.SYSADMIN).token
+
+                    val xlsx = buildXlsx(
+                        listOf(
+                            listOf("MRC-OK", "MRC OK STORE", "MalformISP", "SDWAN", "MRC-ACC-1", "MC-1", "1/1/2025", 1200.0),
+                            listOf("MRC-BAD", "MRC BAD STORE", "MalformISP", "SDWAN", "MRC-ACC-2", "MC-2", "1/1/2025", "abc"),
+                        ),
+                    )
+
+                    val resp = uploadXlsx(token, xlsx)
+                    resp.status shouldBe HttpStatusCode.OK
+                    val data = resp.bodyAsText().asJson().data()
+                    data["accountsCreated"]!!.jsonPrimitive.int shouldBe 1
+                    data["rowsSkipped"]!!.jsonPrimitive.int shouldBeGreaterThanOrEqual 1
+                    data["rowsFailed"]!!.jsonPrimitive.int shouldBe 0
+                    val skipReasons = data["skipReasons"]!!.jsonArray.map { it.jsonPrimitive.content }
+                    skipReasons.any { it.contains("invalid or zero Monthly Recurring Amount") } shouldBe true
+                }
+            }
+        }
+    }
+
+    Given("a sysadmin and an XLSX where one row fails at the DB layer") {
+        When("uploading it") {
+            Then("valid rows commit and the failing row is reported without rolling back the others") {
+                testApplication {
+                    application { testModule() }
+                    val token = signIn(UserRole.SYSADMIN).token
+
+                    // Second row passes app validation but overflows numeric(14,2) at insert (16 integer
+                    // digits >> the 12-digit cap), forcing a per-row DB failure.
+                    val xlsx = buildXlsx(
+                        listOf(
+                            listOf("PC-OK", "PC OK STORE", "PartISP", "SDWAN", "PC-ACC-1", "PC-1", "1/1/2025", 1000.0),
+                            listOf("PC-BAD", "PC BAD STORE", "PartISP", "SDWAN", "PC-ACC-2", "PC-2", "1/1/2025", "9999999999999999"),
+                        ),
+                    )
+
+                    val resp = uploadXlsx(token, xlsx)
+                    resp.status shouldBe HttpStatusCode.OK
+                    val data = resp.bodyAsText().asJson().data()
+                    data["accountsCreated"]!!.jsonPrimitive.int shouldBe 1
+                    data["rowsFailed"]!!.jsonPrimitive.int shouldBe 1
+                    data["failureReasons"]!!.jsonArray.size shouldBeGreaterThanOrEqual 1
+
+                    // Re-upload: the good row is now reused; the bad row fails again — proving the good
+                    // row committed and the bad row's store + account rolled back on the first run.
+                    val data2 = uploadXlsx(token, xlsx).bodyAsText().asJson().data()
+                    data2["accountsCreated"]!!.jsonPrimitive.int shouldBe 0
+                    data2["accountsReused"]!!.jsonPrimitive.int shouldBe 1
+                    data2["rowsFailed"]!!.jsonPrimitive.int shouldBe 1
                 }
             }
         }

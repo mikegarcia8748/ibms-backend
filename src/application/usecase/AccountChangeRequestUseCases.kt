@@ -150,8 +150,9 @@ class ApproveAccountChangeRequestUseCase(
         if (request.accountNumberNew != null || request.providerIdNew != null) {
             val newProvider = request.providerIdNew ?: account.providerId
             val newNumber = request.accountNumberNew ?: account.accountNumber
+            val newCircuit = request.circuitIdNew ?: account.circuitId
             if (newProvider != account.providerId || newNumber != account.accountNumber) {
-                if (accounts.existsByProviderAndNumber(newProvider, newNumber)) {
+                if (accounts.existsByIdentity(account.storeId, newProvider, newNumber, newCircuit)) {
                     throw DomainError.Conflict("account number $newNumber already exists for this provider")
                 }
             }

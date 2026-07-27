@@ -68,12 +68,20 @@ class ExposedAccountRepository : AccountRepository {
             .toCursorPage(limit) { it.id }
     }
 
-    override fun existsByProviderAndNumber(providerId: String, accountNumber: String): Boolean =
+    override fun existsByIdentity(storeId: String, providerId: String, accountNumber: String, circuitId: String?): Boolean =
         Accounts.selectAll()
             .where {
-                (Accounts.providerId eq providerId.toUuid()) and
+                val core = (Accounts.storeId eq storeId.toUuid()) and
+                    (Accounts.providerId eq providerId.toUuid()) and
                     (Accounts.accountNumber eq accountNumber) and
                     (Accounts.status notInList listOf(AccountStatus.TRANSFERRED, AccountStatus.INACTIVE))
+                // Mirror the DB's COALESCE(circuit_id,'') unique index: a null/blank
+                // circuit matches rows whose circuit is null or empty.
+                if (circuitId.isNullOrBlank()) {
+                    core and (Accounts.circuitId.isNull() or (Accounts.circuitId eq ""))
+                } else {
+                    core and (Accounts.circuitId eq circuitId)
+                }
             }
             .count() > 0
 
