@@ -1,6 +1,7 @@
 package com.puregoldbe.ibms.adapter
 
 import com.puregoldbe.ibms.domain.model.UserRole
+import com.puregoldbe.ibms.support.PDF_BYTES
 import com.puregoldbe.ibms.support.signIn
 import com.puregoldbe.ibms.support.testModule
 import io.kotest.core.spec.style.BehaviorSpec
@@ -42,7 +43,7 @@ class CreateISPAccountSpec : BehaviorSpec({
         val attachmentId = pd.str("attachmentId")
         val uploadUrl = pd.str("url").removePrefix("http://localhost:8080")
 
-        val put = client.put(uploadUrl) { setBody("test-bytes".toByteArray()) }
+        val put = client.put(uploadUrl) { setBody(PDF_BYTES) }
         put.status shouldBe HttpStatusCode.OK
         return attachmentId
     }

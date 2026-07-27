@@ -3,6 +3,7 @@ package com.puregoldbe.ibms.adapter
 import com.puregoldbe.ibms.domain.model.UserRole
 import com.puregoldbe.ibms.support.signIn
 import com.puregoldbe.ibms.support.testModule
+import com.puregoldbe.ibms.support.uploadPdfProof
 import io.kotest.core.spec.style.BehaviorSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
@@ -58,18 +59,20 @@ class AccountExportSpec : BehaviorSpec({
                     }.bodyAsText().asJson().data().str("id")
 
                     // --- seed: 2 accounts ---
+                    val exportProof1 = uploadPdfProof(adminToken, "subscription_proof")
                     client.post("/accounts") {
                         header(HttpHeaders.Authorization, "Bearer $adminToken")
                         contentType(ContentType.Application.Json)
                         setBody(
-                            """{"accountNumber":"exp-$s-1","providerId":"$providerId","storeId":"$storeId","rate":"1000","installationDate":"2020-01-01"}""",
+                            """{"accountNumber":"exp-$s-1","providerId":"$providerId","storeId":"$storeId","rate":"1000","installationDate":"2020-01-01","subscriptionProofIds":["$exportProof1"]}""",
                         )
                     }.status shouldBe HttpStatusCode.Created
+                    val exportProof2 = uploadPdfProof(adminToken, "subscription_proof")
                     client.post("/accounts") {
                         header(HttpHeaders.Authorization, "Bearer $adminToken")
                         contentType(ContentType.Application.Json)
                         setBody(
-                            """{"accountNumber":"exp-$s-2","providerId":"$providerId","storeId":"$storeId","rate":"2000","installationDate":"2020-01-01"}""",
+                            """{"accountNumber":"exp-$s-2","providerId":"$providerId","storeId":"$storeId","rate":"2000","installationDate":"2020-01-01","subscriptionProofIds":["$exportProof2"]}""",
                         )
                     }.status shouldBe HttpStatusCode.Created
 
@@ -120,11 +123,12 @@ class AccountExportSpec : BehaviorSpec({
                         )
                     }.bodyAsText().asJson().data().str("id")
 
+                    val exportProof3 = uploadPdfProof(adminToken, "subscription_proof")
                     client.post("/accounts") {
                         header(HttpHeaders.Authorization, "Bearer $adminToken")
                         contentType(ContentType.Application.Json)
                         setBody(
-                            """{"accountNumber":"filt-$s-1","providerId":"$providerId","storeId":"$storeId","rate":"1500","installationDate":"2020-01-01"}""",
+                            """{"accountNumber":"filt-$s-1","providerId":"$providerId","storeId":"$storeId","rate":"1500","installationDate":"2020-01-01","subscriptionProofIds":["$exportProof3"]}""",
                         )
                     }.status shouldBe HttpStatusCode.Created
 
@@ -168,11 +172,12 @@ class AccountExportSpec : BehaviorSpec({
                         )
                     }.bodyAsText().asJson().data().str("id")
 
+                    val exportProof4 = uploadPdfProof(adminToken, "subscription_proof")
                     client.post("/accounts") {
                         header(HttpHeaders.Authorization, "Bearer $adminToken")
                         contentType(ContentType.Application.Json)
                         setBody(
-                            """{"accountNumber":"stat-$s-1","providerId":"$providerId","storeId":"$storeId","rate":"3000","installationDate":"2020-01-01"}""",
+                            """{"accountNumber":"stat-$s-1","providerId":"$providerId","storeId":"$storeId","rate":"3000","installationDate":"2020-01-01","subscriptionProofIds":["$exportProof4"]}""",
                         )
                     }.status shouldBe HttpStatusCode.Created
 

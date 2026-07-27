@@ -1,5 +1,7 @@
 package com.puregoldbe.ibms.support
 
+import com.puregoldbe.ibms.domain.model.Attachment
+import com.puregoldbe.ibms.domain.model.AttachmentPurpose
 import com.puregoldbe.ibms.domain.port.Clock
 import com.puregoldbe.ibms.domain.port.IdempotencyKeyRepository
 import com.puregoldbe.ibms.domain.port.IdempotencyRecord
@@ -35,3 +37,20 @@ class FakeIdempotencyKeyRepository : IdempotencyKeyRepository {
 class FakeClock(var instant: Instant = Instant.fromEpochSeconds(1_700_000_000)) : Clock {
     override fun now(): Instant = instant
 }
+
+/**
+ * A fully-uploaded PDF proof attachment for use-case specs: `sizeBytes` is set (bytes
+ * were stored) and `contentType` is `application/pdf`, so
+ * [com.puregoldbe.ibms.domain.service.PdfProofPolicy] accepts it.
+ */
+fun uploadedPdfAttachment(
+    id: String,
+    purpose: AttachmentPurpose = AttachmentPurpose.SUBSCRIPTION_PROOF,
+): Attachment = Attachment(
+    id = id,
+    purpose = purpose,
+    storageKey = "${purpose.name.lowercase()}/$id",
+    contentType = "application/pdf",
+    sizeBytes = 1024L,
+    createdAt = Instant.fromEpochSeconds(0),
+)

@@ -7,6 +7,7 @@ import com.puregoldbe.ibms.domain.port.PresignOp
 import com.puregoldbe.ibms.domain.port.PresignPort
 import com.puregoldbe.ibms.domain.port.StoragePort
 import com.puregoldbe.ibms.domain.port.TransactionRunner
+import com.puregoldbe.ibms.domain.service.PdfProofPolicy
 import java.util.UUID
 
 /**
@@ -62,7 +63,21 @@ class StoreBlobUseCase(
         if (bytes.isEmpty()) throw DomainError.Validation("uploaded file is empty")
         val att = tx.inTransaction { attachments.findById(id) }
             ?: throw DomainError.NotFound("attachment $id not found")
+        // Proof files must be real PDFs within the size cap; other purposes (OCR
+        // sources, photos) are unrestricted.
+        val isProof = att.purpose in PdfProofPolicy.PROOF_PURPOSES
+        if (isProof) {
+            if (bytes.size > PdfProofPolicy.MAX_BYTES) {
+                throw DomainError.Validation("PDF exceeds the ${PdfProofPolicy.MAX_BYTES / (1024 * 1024)} MB limit")
+            }
+            if (!PdfProofPolicy.isPdfBytes(bytes)) throw DomainError.Validation("proof file must be a PDF")
+        }
         storage.put(att.storageKey, bytes)
+        // Stamp the row as uploaded so the account use cases can require an actually-
+        // uploaded PDF (a presigned-but-never-uploaded row keeps sizeBytes == null).
+        if (isProof) {
+            tx.inTransaction { attachments.markUploaded(id, bytes.size.toLong(), PdfProofPolicy.CONTENT_TYPE) }
+        }
     }
 }
 

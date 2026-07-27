@@ -3,6 +3,7 @@ package com.puregoldbe.ibms.adapter
 import com.puregoldbe.ibms.domain.model.UserRole
 import com.puregoldbe.ibms.support.signIn
 import com.puregoldbe.ibms.support.testModule
+import com.puregoldbe.ibms.support.uploadPdfProof
 import io.kotest.core.spec.style.BehaviorSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
@@ -71,11 +72,12 @@ class AccountChangeRequestSpec : BehaviorSpec({
         val storeId = store.bodyAsText().asJson().data().str("id")
 
         val accNum = "ACC-${System.nanoTime()}"
+        val subProof = uploadPdfProof(token, "subscription_proof")
         val acc = client.post("/accounts") {
             header(HttpHeaders.Authorization, "Bearer $token")
             contentType(ContentType.Application.Json)
             setBody(
-                """{"accountNumber":"$accNum","providerId":"$providerId","storeId":"$storeId","rate":"1000.00","installationDate":"2025-01-01","planName":"Basic","circuitId":"CIR-001"}""",
+                """{"accountNumber":"$accNum","providerId":"$providerId","storeId":"$storeId","rate":"1000.00","installationDate":"2025-01-01","planName":"Basic","circuitId":"CIR-001","subscriptionProofIds":["$subProof"]}""",
             )
         }
         acc.status shouldBe HttpStatusCode.Created
@@ -94,11 +96,12 @@ class AccountChangeRequestSpec : BehaviorSpec({
         storeId: String,
         accountNumber: String,
     ): String {
+        val subProof = uploadPdfProof(token, "subscription_proof")
         val acc = client.post("/accounts") {
             header(HttpHeaders.Authorization, "Bearer $token")
             contentType(ContentType.Application.Json)
             setBody(
-                """{"accountNumber":"$accountNumber","providerId":"$providerId","storeId":"$storeId","rate":"1500.00","installationDate":"2025-02-01","circuitId":"CIR-001"}""",
+                """{"accountNumber":"$accountNumber","providerId":"$providerId","storeId":"$storeId","rate":"1500.00","installationDate":"2025-02-01","circuitId":"CIR-001"},"subscriptionProofIds":["$subProof"]}""",
             )
         }
         acc.status shouldBe HttpStatusCode.Created
@@ -669,7 +672,7 @@ class AccountChangeRequestSpec : BehaviorSpec({
                     val admin = signIn()
                     val sec = signIn(UserRole.SECRETARY)
                     val setup = setupActiveAccount(admin.token)
-                    val deactivationProof = createAttachment(admin.token)
+                    val deactivationProof = uploadPdfProof(admin.token, "deactivation_proof")
 
                     client.post("/accounts/${setup.accountId}/deactivate") {
                         header(HttpHeaders.Authorization, "Bearer ${sec.token}")

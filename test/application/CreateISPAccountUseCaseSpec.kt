@@ -13,6 +13,7 @@ import com.puregoldbe.ibms.domain.port.AttachmentRepository
 import com.puregoldbe.ibms.domain.port.ProviderRepository
 import com.puregoldbe.ibms.support.FakeClock
 import com.puregoldbe.ibms.support.ImmediateTransactionRunner
+import com.puregoldbe.ibms.support.uploadedPdfAttachment
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.IsolationMode
 import io.kotest.core.spec.style.BehaviorSpec
@@ -80,7 +81,7 @@ class CreateISPAccountUseCaseSpec : BehaviorSpec({
     // ======================================================================
     Given("valid input with installationDate AFTER paymentScheduleDay") {
         val input = validInput(installationDate = LocalDate(2026, 7, 20)) // day 20
-        every { attachments.exists("att-proof") } returns true
+        every { attachments.findById("att-proof") } returns uploadedPdfAttachment("att-proof")
         every { providers.findById("prov-1") } returns provider(paymentScheduleDay = 15)
         val reqSlot = slot<AccountUpsertRequest>()
         coEvery { createAccount(capture(reqSlot), "actor") } returns sampleAccount
@@ -97,7 +98,7 @@ class CreateISPAccountUseCaseSpec : BehaviorSpec({
 
     Given("valid input with installationDate BEFORE paymentScheduleDay") {
         val input = validInput(installationDate = LocalDate(2026, 7, 10)) // day 10
-        every { attachments.exists("att-proof") } returns true
+        every { attachments.findById("att-proof") } returns uploadedPdfAttachment("att-proof")
         every { providers.findById("prov-1") } returns provider(paymentScheduleDay = 15)
         val reqSlot = slot<AccountUpsertRequest>()
         coEvery { createAccount(capture(reqSlot), "actor") } returns sampleAccount
@@ -113,7 +114,7 @@ class CreateISPAccountUseCaseSpec : BehaviorSpec({
 
     Given("valid input with installationDate ON paymentScheduleDay") {
         val input = validInput(installationDate = LocalDate(2026, 7, 15)) // day 15
-        every { attachments.exists("att-proof") } returns true
+        every { attachments.findById("att-proof") } returns uploadedPdfAttachment("att-proof")
         every { providers.findById("prov-1") } returns provider(paymentScheduleDay = 15)
         val reqSlot = slot<AccountUpsertRequest>()
         coEvery { createAccount(capture(reqSlot), "actor") } returns sampleAccount
@@ -210,19 +211,19 @@ class CreateISPAccountUseCaseSpec : BehaviorSpec({
 
     Given("a non-existent subscriptionProofId") {
         val input = validInput(subscriptionProofId = "missing-att")
-        every { attachments.exists("missing-att") } returns false
+        every { attachments.findById("missing-att") } returns null
 
         When("creating the ISP account") {
             Then("it throws validation error for missing attachment") {
                 val err = shouldThrow<DomainError.Validation> { useCase(input, "actor") }
-                err.message shouldBe "subscription proof attachment not found"
+                err.message shouldBe "a valid subscriptionProofId is required"
             }
         }
     }
 
     Given("an unknown providerId") {
         val input = validInput(providerId = "unknown-prov")
-        every { attachments.exists("att-proof") } returns true
+        every { attachments.findById("att-proof") } returns uploadedPdfAttachment("att-proof")
         every { providers.findById("unknown-prov") } returns null
 
         When("creating the ISP account") {
@@ -238,7 +239,7 @@ class CreateISPAccountUseCaseSpec : BehaviorSpec({
     // ======================================================================
     Given("installDate day 1 with paymentScheduleDay 5") {
         val input = validInput(installationDate = LocalDate(2026, 3, 1))
-        every { attachments.exists("att-proof") } returns true
+        every { attachments.findById("att-proof") } returns uploadedPdfAttachment("att-proof")
         every { providers.findById("prov-1") } returns provider(paymentScheduleDay = 5)
         val reqSlot = slot<AccountUpsertRequest>()
         coEvery { createAccount(capture(reqSlot), "actor") } returns sampleAccount
@@ -254,7 +255,7 @@ class CreateISPAccountUseCaseSpec : BehaviorSpec({
 
     Given("installDate day 5 with paymentScheduleDay 5") {
         val input = validInput(installationDate = LocalDate(2026, 3, 5))
-        every { attachments.exists("att-proof") } returns true
+        every { attachments.findById("att-proof") } returns uploadedPdfAttachment("att-proof")
         every { providers.findById("prov-1") } returns provider(paymentScheduleDay = 5)
         val reqSlot = slot<AccountUpsertRequest>()
         coEvery { createAccount(capture(reqSlot), "actor") } returns sampleAccount
@@ -270,7 +271,7 @@ class CreateISPAccountUseCaseSpec : BehaviorSpec({
 
     Given("installDate day 6 with paymentScheduleDay 5") {
         val input = validInput(installationDate = LocalDate(2026, 3, 6))
-        every { attachments.exists("att-proof") } returns true
+        every { attachments.findById("att-proof") } returns uploadedPdfAttachment("att-proof")
         every { providers.findById("prov-1") } returns provider(paymentScheduleDay = 5)
         val reqSlot = slot<AccountUpsertRequest>()
         coEvery { createAccount(capture(reqSlot), "actor") } returns sampleAccount
@@ -286,7 +287,7 @@ class CreateISPAccountUseCaseSpec : BehaviorSpec({
 
     Given("installDate day 31 with paymentScheduleDay 31") {
         val input = validInput(installationDate = LocalDate(2026, 1, 31))
-        every { attachments.exists("att-proof") } returns true
+        every { attachments.findById("att-proof") } returns uploadedPdfAttachment("att-proof")
         every { providers.findById("prov-1") } returns provider(paymentScheduleDay = 31)
         val reqSlot = slot<AccountUpsertRequest>()
         coEvery { createAccount(capture(reqSlot), "actor") } returns sampleAccount
@@ -305,7 +306,7 @@ class CreateISPAccountUseCaseSpec : BehaviorSpec({
     // ======================================================================
     Given("accountNumber with leading/trailing spaces") {
         val input = validInput(accountNumber = "  ACCT-001  ", installationDate = LocalDate(2026, 7, 10))
-        every { attachments.exists("att-proof") } returns true
+        every { attachments.findById("att-proof") } returns uploadedPdfAttachment("att-proof")
         every { providers.findById("prov-1") } returns provider(paymentScheduleDay = 15)
         val reqSlot = slot<AccountUpsertRequest>()
         coEvery { createAccount(capture(reqSlot), "actor") } returns sampleAccount
@@ -321,7 +322,7 @@ class CreateISPAccountUseCaseSpec : BehaviorSpec({
 
     Given("circuitId with leading/trailing spaces") {
         val input = validInput(circuitId = "  CKT-100  ", installationDate = LocalDate(2026, 7, 10))
-        every { attachments.exists("att-proof") } returns true
+        every { attachments.findById("att-proof") } returns uploadedPdfAttachment("att-proof")
         every { providers.findById("prov-1") } returns provider(paymentScheduleDay = 15)
         val reqSlot = slot<AccountUpsertRequest>()
         coEvery { createAccount(capture(reqSlot), "actor") } returns sampleAccount

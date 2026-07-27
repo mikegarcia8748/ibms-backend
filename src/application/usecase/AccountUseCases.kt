@@ -7,9 +7,11 @@ import com.puregoldbe.ibms.domain.model.AccountUpsertRequest
 import com.puregoldbe.ibms.domain.model.CursorPage
 import com.puregoldbe.ibms.domain.port.AccountRepository
 import com.puregoldbe.ibms.domain.port.ActivityRecorder
+import com.puregoldbe.ibms.domain.port.AttachmentRepository
 import com.puregoldbe.ibms.domain.port.ProviderRepository
 import com.puregoldbe.ibms.domain.port.StoreRepository
 import com.puregoldbe.ibms.domain.port.TransactionRunner
+import com.puregoldbe.ibms.domain.service.PdfProofPolicy
 import com.puregoldbe.ibms.domain.valueobject.Money
 
 class ListAccountsUseCase(
@@ -35,20 +37,24 @@ class GetAccountUseCase(
 }
 
 /**
- * Creates an ISP account. Business rules: rate (MRC) must be > 0; provider & store
- * must exist; (provider, account_number) is unique (blocks duplicates the schema
- * also guards).
+ * Creates an ISP account. Business rules: rate (MRC) must be > 0; a subscription proof
+ * PDF must be uploaded; provider & store must exist; (provider, account_number) is
+ * unique (blocks duplicates the schema also guards).
  */
 class CreateAccountUseCase(
     private val accounts: AccountRepository,
     private val providers: ProviderRepository,
     private val stores: StoreRepository,
     private val activity: ActivityRecorder,
+    private val attachments: AttachmentRepository,
     private val tx: TransactionRunner,
 ) {
     suspend operator fun invoke(input: AccountUpsertRequest, actorId: String?): Account = tx.inTransaction {
         if (input.accountNumber.isBlank()) throw DomainError.Validation("accountNumber is required")
         if (!Money.isPositive(input.rate)) throw DomainError.Validation("rate (MRC) must be greater than 0")
+        val proofId = input.subscriptionProofIds.firstOrNull()
+            ?: throw DomainError.Validation("a subscription proof (PDF) is required")
+        PdfProofPolicy.requireUploadedPdf(attachments.findById(proofId), "subscriptionProofId")
         providers.findById(input.providerId) ?: throw DomainError.Validation("unknown providerId ${input.providerId}")
         stores.findById(input.storeId) ?: throw DomainError.Validation("unknown storeId ${input.storeId}")
         if (accounts.existsByIdentity(input.storeId, input.providerId, input.accountNumber, input.circuitId)) {
