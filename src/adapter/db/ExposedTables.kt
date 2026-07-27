@@ -191,6 +191,7 @@ object TopSheetDetails : UUIDTable("topsheet_details") {
     val accountNumber  = text("account_number").nullable()
     val accountStatus  = text("account_status").nullable()
     val rfpNumber      = text("rfp_number").nullable()
+    val rfpUniqueKey   = text("rfp_unique_key").nullable()
     val rfpSortOrder   = short("rfp_sort_order").nullable()
     val arrearsAmount  = decimal("arrears_amount", 14, 2)
     val arrearsPeriods = text("arrears_periods").nullable()

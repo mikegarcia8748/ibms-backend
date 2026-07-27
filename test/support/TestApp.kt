@@ -35,6 +35,8 @@ fun testAppConfig(): AppConfig = AppConfig(
     mailerSendApiKey = null,
     mailerSendFromEmail = null,
     appUrl = "http://localhost:8080",
+    rfpApiBaseUrl = null,
+    rfpApiKey = null,
 )
 
 fun Application.testModule() {
