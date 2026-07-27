@@ -22,12 +22,12 @@ import com.puregoldbe.ibms.domain.port.ProviderRepository
 import com.puregoldbe.ibms.domain.port.StoreRepository
 import com.puregoldbe.ibms.domain.port.TopSheetRepository
 import com.puregoldbe.ibms.domain.port.TransactionRunner
+import com.puregoldbe.ibms.domain.service.BILLING_ZONE
 import com.puregoldbe.ibms.domain.service.InvoiceNumberFormatter
 import com.puregoldbe.ibms.domain.service.ProrationEngine
 import com.puregoldbe.ibms.domain.valueobject.BillingPeriod
 import com.puregoldbe.ibms.domain.valueobject.toMoney
 import com.puregoldbe.ibms.domain.valueobject.toMoneyString
-import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import java.math.BigDecimal
 import java.math.BigInteger
@@ -53,27 +53,6 @@ internal data class Classified(
     /** Accounts whose subscription starts after the selected period (validation warning). */
     val notYetSubscribed: List<Account>,
 )
-
-/**
- * Legacy current-period-only projection (no arrears). Retained for the deprecated
- * [CompileTopSheetUseCase] so its behavior is unchanged.
- */
-internal fun computeEligible(
-    providerId: String,
-    billingPeriod: String,
-    accounts: List<Account>,
-    storesById: Map<String, Store>,
-    alreadyBilled: Set<String>,
-): List<EligibleLine> = accounts
-    .filter { ProrationEngine.isEligible(it, providerId, billingPeriod, alreadyBilled) }
-    .map { acc ->
-        EligibleLine(
-            account = acc,
-            store = storesById[acc.storeId],
-            proratedAmount = ProrationEngine.proratedAmount(acc, billingPeriod),
-            isProrated = ProrationEngine.isFirstBillProrated(acc, billingPeriod),
-        )
-    }
 
 /**
  * Two-phase classification: split a provider's accounts into bill-now (with any
@@ -124,8 +103,8 @@ private fun requirePeriod(billingPeriod: String) {
 private fun requireNotFuturePeriod(billingPeriod: String, clock: Clock) {
     requirePeriod(billingPeriod)
     val now = clock.now()
-    // Use Asia/Manila timezone for business day boundary
-    val local = now.toLocalDateTime(TimeZone.of("Asia/Manila"))
+    // Use the canonical billing timezone (Asia/Manila) for the business-day boundary.
+    val local = now.toLocalDateTime(BILLING_ZONE)
     val currentPeriod = "${local.year}-${local.monthNumber.toString().padStart(2, '0')}"
     if (billingPeriod > currentPeriod) {
         throw DomainError.Validation("Cannot select a future billing period")
@@ -187,78 +166,6 @@ private fun EligibleLine.toCompilableLine(): CompilableLine = CompilableLine(
     storeId = account.storeId,
 )
 
-/**
- * @deprecated Use [CreateDraftTopSheetUseCase] + [ConfirmTopSheetUseCase] instead. Kept for backward compatibility.
- *
- * Atomically compile a TopSheet: bump the provider's invoice sequence (row-locked),
- * mint `<ACRONYM>-YYYYMM-XXXX`, and insert the header + all lines. Re-compiling a
- * period is blocked because already-billed accounts are excluded (the double-billing
- * guard is also enforced by the uq_account_per_period index).
- */
-class CompileTopSheetUseCase(
-    private val accounts: AccountRepository,
-    private val stores: StoreRepository,
-    private val providers: ProviderRepository,
-    private val topsheets: TopSheetRepository,
-    private val sequences: InvoiceSequenceRepository,
-    private val idempotency: IdempotencyKeyRepository,
-    private val activity: ActivityRecorder,
-    private val tx: TransactionRunner,
-) {
-    suspend operator fun invoke(
-        providerId: String,
-        billingPeriod: String,
-        compilerId: String,
-        idem: IdempotencyContext? = null,
-    ): TopSheet = tx.inTransaction {
-        idempotent(idempotency, "topsheet.compile", idem, 201) {
-            requirePeriod(billingPeriod)
-            val provider = providers.findById(providerId)
-                ?: throw DomainError.NotFound("provider $providerId not found")
-            val billed = topsheets.billedAccountIds(billingPeriod)
-            val storesById = stores.list(null, null).associateBy { it.id }
-            val lines = computeEligible(providerId, billingPeriod, accounts.list(null, providerId, null), storesById, billed)
-            if (lines.isEmpty()) {
-                throw DomainError.Conflict(
-                    "no eligible accounts to compile for provider $providerId / $billingPeriod",
-                    "nothing_to_compile",
-                )
-            }
-            val sequence = sequences.nextValue(providerId)
-            val prefix = sequences.prefixOf(providerId) ?: InvoiceNumberFormatter.prefix(provider.name)
-            val invoiceNumber = InvoiceNumberFormatter.format(prefix, billingPeriod, sequence)
-
-            val topsheet = topsheets.create(
-                invoiceNumber = invoiceNumber,
-                billingPeriod = billingPeriod,
-                providerId = providerId,
-                providerName = provider.name,
-                accountCount = lines.size,
-                totalAmount = lines.total(),
-                compilerId = compilerId,
-            )
-            lines.forEach { e ->
-                topsheets.addLine(
-                    topsheet.id,
-                    NewTopSheetLine(
-                        accountId = e.account.id,
-                        billingPeriod = billingPeriod,
-                        proratedAmount = e.proratedAmount,
-                        fullAmount = e.account.rate,
-                        branchCode = e.store?.branchCode,
-                        storeName = e.store?.name,
-                        circuitId = e.account.circuitId,
-                        accountNumber = e.account.accountNumber,
-                        accountStatus = e.account.status.name.lowercase(),
-                    ),
-                )
-            }
-            activity.record(compilerId, "topsheet.compiled", "topsheet", topsheet.id)
-            topsheet
-        }
-    }
-}
-
 class ListTopSheetsUseCase(
     private val topsheets: TopSheetRepository,
     private val tx: TransactionRunner,
@@ -299,6 +206,10 @@ class ApproveTopSheetUseCase(
         val ts = topsheets.findById(id) ?: throw DomainError.NotFound("topsheet $id not found")
         if (ts.status != TopSheetStatus.COMPILED) {
             throw DomainError.Conflict("only compiled topsheets can be approved (was ${ts.status.name.lowercase()})")
+        }
+        // Segregation of duties: the compiler cannot approve their own topsheet.
+        if (ts.compilerId == approverId) {
+            throw DomainError.Forbidden("you cannot approve a topsheet you compiled")
         }
         val approved = topsheets.approve(id, approverId, clock.now())
             ?: throw DomainError.NotFound("topsheet $id not found")
@@ -603,9 +514,11 @@ class ConfirmTopSheetUseCase(
                 ?: throw DomainError.Conflict("topsheet $topsheetId has no provider assigned", "missing_provider")
             // Re-validate eligibility (accounts may have changed since draft creation)
             val billedIds = topsheets.billedAccountIds(ts.billingPeriod)
+            val settledByAccount = topsheets.billedPeriodsByAccount(providerId)
             val accountsById = accounts.list(null, providerId, null).associateBy { it.id }
             val ineligible = mutableListOf<String>()
             val doubleBilled = mutableListOf<String>()
+            val staleArrears = mutableListOf<String>()
             for (line in lines) {
                 val account = accountsById[line.accountId]
                 if (account == null || !ProrationEngine.isEligible(account, providerId, ts.billingPeriod, emptySet())) {
@@ -613,12 +526,25 @@ class ConfirmTopSheetUseCase(
                 } else if (billedIds.contains(line.accountId)) {
                     doubleBilled.add(line.accountId)
                 }
+                // A prior period folded into this line's arrears at draft time may have been
+                // billed on another (committed, non-draft) topsheet since — recovering it again
+                // would double-charge. Our own DRAFT is excluded from settledByAccount.
+                val settled = settledByAccount[line.accountId] ?: emptySet()
+                if (line.arrearsPeriods.any { it in settled }) {
+                    staleArrears.add(line.accountId)
+                }
             }
             if (ineligible.isNotEmpty()) {
                 throw DomainError.Conflict("accounts no longer eligible: $ineligible")
             }
             if (doubleBilled.isNotEmpty()) {
                 throw DomainError.Conflict("accounts already billed in this period: $doubleBilled")
+            }
+            if (staleArrears.isNotEmpty()) {
+                throw DomainError.Conflict(
+                    "arrears periods already recovered on another topsheet since draft; re-preview required: $staleArrears",
+                    "arrears_stale",
+                )
             }
             // Recalculate totals from current line values (current-period charge + arrears)
             val totalAmount = lines

@@ -87,16 +87,14 @@ class ApproveTopSheetUseCaseSpec : BehaviorSpec({
         }
     }
 
-    Given("a topsheet compiled and approved by the same user") {
+    Given("a topsheet whose compiler tries to approve it") {
         val compiled = topsheet(TopSheetStatus.COMPILED, compilerId = "same-user")
-        val approved = compiled.copy(status = TopSheetStatus.APPROVED, approvedByFinanceId = "same-user")
         every { topsheets.findById("ts1") } returns compiled
-        every { topsheets.approve("ts1", "same-user", clock.now()) } returns approved
 
         When("that same user approves their own compilation") {
-            Then("it currently succeeds -- no segregation-of-duties check exists (gap, not fixed here)") {
-                val result = useCase("ts1", "same-user")
-                result.status shouldBe TopSheetStatus.APPROVED
+            Then("it is rejected -- segregation of duties (approver must differ from compiler)") {
+                shouldThrow<DomainError.Forbidden> { useCase("ts1", "same-user") }
+                verify(exactly = 0) { topsheets.approve(any(), any(), any()) }
             }
         }
     }

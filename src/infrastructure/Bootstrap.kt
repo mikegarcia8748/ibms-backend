@@ -125,7 +125,6 @@ fun Application.moduleWith(cfg: AppConfig) {
     val storeBlob = StoreBlobUseCase(attachments, storage, presign, tx)
     val readBlob = ReadBlobUseCase(attachments, storage, presign, tx)
     val previewCompilation = PreviewCompilationUseCase(accounts, stores, topsheets, clock, tx)
-    val compileTopSheet = CompileTopSheetUseCase(accounts, stores, providers, topsheets, sequences, idempotency, activities, tx)
     val listTopSheets = ListTopSheetsUseCase(topsheets, tx)
     val getTopSheet = GetTopSheetUseCase(topsheets, tx)
     val getTopSheetDetails = GetTopSheetDetailsUseCase(topsheets, tx)
@@ -191,7 +190,7 @@ fun Application.moduleWith(cfg: AppConfig) {
             activityRoutes(listActivities)
             ocrRoutes(triggerOcr, listOcrBatches, getOcrBatchRows, listOcrTemplates, createOcrTemplate, updateOcrTemplate)
             topSheetRoutes(
-                previewCompilation, compileTopSheet, createDraftTopSheet, updateDraftLine,
+                previewCompilation, createDraftTopSheet, updateDraftLine,
                 assignRfpNumbers, removeDraftLine, confirmTopSheet, listTopSheets, getTopSheet,
                 getTopSheetDetails, approveTopSheet, payTopSheet,
             )

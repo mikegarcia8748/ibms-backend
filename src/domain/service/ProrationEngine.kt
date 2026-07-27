@@ -18,8 +18,9 @@ import kotlin.math.max
  * IMPORTANT correctness note vs. the original:
  *   The React version relied on `new Date("8/20/2026")` and `.getTime()` which is
  *   locale/timezone-sensitive and a known source of off-by-one bugs. This port
- *   parses calendar dates explicitly (no timezone), and does money math on a
- *   scaled integer to avoid float drift. The 30-day grace-period semantics are
+ *   parses calendar dates explicitly and converts every timestamp through the
+ *   canonical [BILLING_ZONE] (Asia/Manila), and does money math on a scaled
+ *   integer to avoid float drift. The 30-day grace-period semantics are
  *   preserved exactly.
  *
  * Money is passed/returned as a 2dp decimal String (see `Money` typealias). The
@@ -56,7 +57,7 @@ object ProrationEngine {
 
         val termAt = account.terminationRequestedAt
         if (termAt != null) {
-            val termDate = termAt.plus(GRACE, TimeZone.UTC).toLocalDateTime(TimeZone.UTC).date
+            val termDate = termAt.plus(GRACE, BILLING_ZONE).toLocalDateTime(BILLING_ZONE).date
             val termPeriod = periodOf(termDate)
             when {
                 termPeriod == billingPeriod -> endDay = termDate.dayOfMonth
@@ -89,7 +90,7 @@ object ProrationEngine {
 
         val termAt = account.terminationRequestedAt
         if (termAt != null) {
-            val termDate = termAt.plus(GRACE, TimeZone.UTC).toLocalDateTime(TimeZone.UTC).date
+            val termDate = termAt.plus(GRACE, BILLING_ZONE).toLocalDateTime(BILLING_ZONE).date
             if (periodOf(termDate) < billingPeriod) return false   // fully terminated before period
         } else if (account.status == AccountStatus.INACTIVE) {
             return false
@@ -129,7 +130,7 @@ object ProrationEngine {
      * whatever system it was migrated from).
      */
     fun billingStartPeriod(account: Account): String =
-        periodOf(account.createdAt.toLocalDateTime(TimeZone.UTC).date)
+        periodOf(account.createdAt.toLocalDateTime(BILLING_ZONE).date)
 
     /**
      * Prior periods (strictly before [billingPeriod]) that carry a non-zero charge and
@@ -191,7 +192,7 @@ object ProrationEngine {
     fun parseFlexibleDate(raw: String?): LocalDate? {
         if (raw.isNullOrBlank()) return null
         raw.toLongOrNull()?.let { epochMs ->
-            return Instant.fromEpochMilliseconds(epochMs).toLocalDateTime(TimeZone.UTC).date
+            return Instant.fromEpochMilliseconds(epochMs).toLocalDateTime(BILLING_ZONE).date
         }
         return runCatching { LocalDate.parse(raw) }.getOrNull() ?: run {
             val m = Regex("""^(\d{1,2})/(\d{1,2})/(\d{4})$""").find(raw.trim()) ?: return null
