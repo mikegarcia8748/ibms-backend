@@ -13,7 +13,14 @@ data class UpdateProviderRequest(val name: String? = null, val paymentScheduleDa
 @Serializable
 data class RejectChangeRequestBody(val reason: String)
 
-/** Summary of a bulk-import run: counts of entities created vs reused, plus skip reasons. */
+/**
+ * Summary of a bulk-import run: counts of entities created vs reused, plus reasons.
+ *
+ * `rowsSkipped`/`skipReasons` are rows rejected during pre-DB validation (missing
+ * required fields, invalid/zero amount). `rowsFailed`/`failureReasons` are rows that
+ * passed validation but threw while committing to the DB — the import is partial:
+ * valid rows commit and failed rows are reported here rather than aborting the run.
+ */
 @Serializable
 data class BulkImportSummary(
     val providers: List<ProviderImportSummary>,
@@ -24,6 +31,8 @@ data class BulkImportSummary(
     val rowsSkipped: Int,
     val skipReasons: List<String>,
     val totalRows: Int,
+    val rowsFailed: Int = 0,
+    val failureReasons: List<String> = emptyList(),
 )
 
 @Serializable

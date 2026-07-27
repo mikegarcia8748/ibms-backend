@@ -126,7 +126,14 @@ interface AccountRepository {
     fun findById(id: String): Account?
     fun list(storeId: String?, providerId: String?, status: AccountStatus?): List<Account>
     fun page(storeId: String?, providerId: String?, status: AccountStatus?, cursor: String?, limit: Int): CursorPage<Account>
-    fun existsByProviderAndNumber(providerId: String, accountNumber: String): Boolean
+    /**
+     * True if a LIVE account (not transferred/inactive) already exists with this
+     * (store, provider, account number, circuit) identity. A null/blank [circuitId]
+     * matches existing accounts whose circuit is null or blank — mirroring the DB's
+     * COALESCE(circuit_id,'') unique index, so no-circuit accounts still dedupe. Scoping
+     * by store lets the same account number recur across stores as distinct accounts.
+     */
+    fun existsByIdentity(storeId: String, providerId: String, accountNumber: String, circuitId: String?): Boolean
     fun create(input: AccountUpsertRequest, createdBy: String?): Account
     fun update(id: String, input: AccountUpsertRequest): Account?
 

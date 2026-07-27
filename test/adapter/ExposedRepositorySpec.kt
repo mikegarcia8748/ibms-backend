@@ -108,7 +108,10 @@ class ExposedRepositorySpec : BehaviorSpec({
                     account.rate shouldBe "1000.00"            // numeric(14,2) round-trip
                     account.installationDate shouldBe LocalDate(2026, 8, 20)
                     account.subscriptionProofIds shouldBe listOf(proof.id)
-                    accounts.existsByProviderAndNumber(provider.id, "0030301234567") shouldBe true
+                    // NULL-safe: a null/blank circuit matches the account (whose circuit is null)...
+                    accounts.existsByIdentity(store.id, provider.id, "0030301234567", null) shouldBe true
+                    // ...but a specific circuit is a distinct identity and does not match.
+                    accounts.existsByIdentity(store.id, provider.id, "0030301234567", "IC-XYZ-001") shouldBe false
                     accounts.list(storeId = store.id, providerId = null, status = null).size shouldBe 1
                 }
             }

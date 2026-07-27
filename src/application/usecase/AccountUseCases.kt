@@ -51,7 +51,7 @@ class CreateAccountUseCase(
         if (!Money.isPositive(input.rate)) throw DomainError.Validation("rate (MRC) must be greater than 0")
         providers.findById(input.providerId) ?: throw DomainError.Validation("unknown providerId ${input.providerId}")
         stores.findById(input.storeId) ?: throw DomainError.Validation("unknown storeId ${input.storeId}")
-        if (accounts.existsByProviderAndNumber(input.providerId, input.accountNumber)) {
+        if (accounts.existsByIdentity(input.storeId, input.providerId, input.accountNumber, input.circuitId)) {
             throw DomainError.Conflict(
                 "account ${input.accountNumber} already exists for this provider",
                 "duplicate_account_number",

@@ -451,9 +451,9 @@ Valid account statuses: `ACTIVE`, `TERMINATION_REQUESTED`, `TRANSFERRED`, `INACT
 
 ### Uniqueness Constraints
 
-- **Rule:** `(provider_id, account_number)` is unique among **live** accounts only — i.e., accounts whose status is not `transferred` or `inactive`.
-  - **Enforcement point:** DB partial unique index `uq_account_number_per_provider_active` (V4 migration); use-case check `accounts.existsByProviderAndNumber()` in `CreateAccountUseCase`.
-  - **Rationale:** A transferred account and its active successor can share the same `(provider_id, account_number)` because the old one is marked `TRANSFERRED`.
+- **Rule:** account identity `(store_id, provider_id, account_number, COALESCE(circuit_id,''))` is unique among **live** accounts only — i.e., accounts whose status is not `transferred` or `inactive`. The same account number may recur across stores and carry many circuits (and circuit may be empty); each distinct identity is its own account.
+  - **Enforcement point:** DB partial unique index `uq_account_identity_active` (V16 migration; lineage V4 → V15 added circuit → V16 added store); use-case check `accounts.existsByIdentity(storeId, providerId, accountNumber, circuitId)` in `CreateAccountUseCase`, bulk import, and change-request approval.
+  - **Rationale:** A transferred account and its active successor can share the same identity because the old one is marked `TRANSFERRED` and excluded from the partial index.
 
 ### Relationship to Stores and Providers
 
@@ -517,7 +517,7 @@ Valid account statuses: `ACTIVE`, `TERMINATION_REQUESTED`, `TRANSFERRED`, `INACT
   - **Fields affected:** `accountNumber`, `circuitId`, `providerId`, `planName`, `rate`, `installationDate`. Unchanged fields (`serviceType`, `speed`, `contractDurationMonths`, `contractStartDate`, `contractEndDate`, `notes`, `installationFee`, `billingPeriodLabel`) are carried over from the current account.
 
 - **Rule:** If the change request modifies `accountNumber` or `providerId` (and the resulting `(newProvider, newNumber)` differs from the current values), a uniqueness check is performed before applying the update.
-  - **Enforcement point:** `ApproveAccountChangeRequestUseCase` — calls `accounts.existsByProviderAndNumber(newProvider, newNumber)`.
+  - **Enforcement point:** `ApproveAccountChangeRequestUseCase` — calls `accounts.existsByIdentity(account.storeId, newProvider, newNumber, newCircuit)` (store is unchanged by a change request).
   - **Rationale:** Prevents creating a duplicate live account on approval.
 
 - **Rule:** On approval, the request is marked `APPROVED` with `approvedById` and `approvedAt` recorded.
@@ -714,7 +714,7 @@ All transitions are one-way; no reversal endpoints exist.
 - **Rule:** A transfer proof attachment is required and must exist.
   - **Enforcement point:** `TransferAccountUseCase` in `AccountLifecycleUseCases.kt` — `if (!attachments.exists(proofId)) throw Validation`.
 
-- **Rule:** The old account is marked `TRANSFERRED` (which frees the partial unique index on `(provider_id, account_number)`).
+- **Rule:** The old account is marked `TRANSFERRED` (which frees the partial unique index on the account identity `(store_id, provider_id, account_number, circuit_id)`; the new account is at a different store anyway).
   - **Enforcement point:** `TransferAccountUseCase` — `accounts.updateStatus(old.id, AccountStatus.TRANSFERRED)`.
 
 - **Rule:** A new `ACTIVE` account is created at the new store carrying the same details (account number, circuit ID, provider, plan, rate, installation date, proofs, etc.) but with a distinct ID.
@@ -885,7 +885,7 @@ All transitions are one-way; no reversal endpoints exist.
   - **Enforcement point:**
     - Providers are matched by name (`providers.findByName()`) — found or created.
     - Stores are matched by `branchCode` (`stores.findByBranchCode()`) — found or created.
-    - Accounts are matched by `(providerId, accountNumber)` (`accounts.existsByProviderAndNumber()`) — found → reused.
+    - Accounts are matched by identity `(storeId, providerId, accountNumber, circuitId)` (`accounts.existsByIdentity()`) — found → reused. Circuit ID is optional for import (empty circuit still imports; store scopes identity).
 
 ### Provider Creation During Import
 

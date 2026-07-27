@@ -309,7 +309,7 @@ class CreateISPAccountSpec : BehaviorSpec({
     // =================================================================
 
     Given("an existing ISP account") {
-        When("creating another with the same provider and accountNumber") {
+        When("creating another with the same provider, accountNumber AND circuitId") {
             Then("returns 409 Conflict") {
                 testApplication {
                     application { testModule() }
@@ -330,16 +330,49 @@ class CreateISPAccountSpec : BehaviorSpec({
                     }
                     first.status shouldBe HttpStatusCode.Created
 
-                    // Second with same provider + accountNumber → conflict
+                    // Same provider + accountNumber + circuitId → same account identity → conflict.
                     val proofId2 = uploadAttachment(admin.token)
                     val second = client.post("/accounts/isp") {
                         header(HttpHeaders.Authorization, "Bearer ${admin.token}")
                         contentType(ContentType.Application.Json)
                         setBody(
-                            """{"accountNumber":"$accNum","circuitId":"CIR-D2","providerId":"$providerId","storeId":"$storeId","rate":"600.00","installationDate":"2026-07-10","subscriptionProofId":"$proofId2"}""",
+                            """{"accountNumber":"$accNum","circuitId":"CIR-D","providerId":"$providerId","storeId":"$storeId","rate":"600.00","installationDate":"2026-07-10","subscriptionProofId":"$proofId2"}""",
                         )
                     }
                     second.status shouldBe HttpStatusCode.Conflict
+                }
+            }
+        }
+
+        When("creating another with the same accountNumber but a DIFFERENT circuitId") {
+            Then("returns 201 — one account number may carry many distinct circuits") {
+                testApplication {
+                    application { testModule() }
+                    val admin = signIn()
+
+                    val providerId = createProvider(admin.token)
+                    val storeId = createStore(admin.token)
+                    val proofId = uploadAttachment(admin.token)
+
+                    val accNum = "MULTI-CIRCUIT-${System.nanoTime()}"
+                    val first = client.post("/accounts/isp") {
+                        header(HttpHeaders.Authorization, "Bearer ${admin.token}")
+                        contentType(ContentType.Application.Json)
+                        setBody(
+                            """{"accountNumber":"$accNum","circuitId":"CIR-A","providerId":"$providerId","storeId":"$storeId","rate":"500.00","installationDate":"2026-07-10","subscriptionProofId":"$proofId"}""",
+                        )
+                    }
+                    first.status shouldBe HttpStatusCode.Created
+
+                    val proofId2 = uploadAttachment(admin.token)
+                    val second = client.post("/accounts/isp") {
+                        header(HttpHeaders.Authorization, "Bearer ${admin.token}")
+                        contentType(ContentType.Application.Json)
+                        setBody(
+                            """{"accountNumber":"$accNum","circuitId":"CIR-B","providerId":"$providerId","storeId":"$storeId","rate":"600.00","installationDate":"2026-07-10","subscriptionProofId":"$proofId2"}""",
+                        )
+                    }
+                    second.status shouldBe HttpStatusCode.Created
                 }
             }
         }
