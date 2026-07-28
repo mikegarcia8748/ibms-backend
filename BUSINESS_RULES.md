@@ -702,6 +702,24 @@ All transitions are one-way; no reversal endpoints exist.
   - **Enforcement point:** `CompileTopSheetUseCase` — populates snapshot fields in `NewTopSheetLine`.
   - **Rationale:** A compiled topsheet reflects the state of the world at compilation, not later changes to the account.
 
+### External RFP Gateway — Transaction Boundary (design note, not yet implemented)
+
+- **Context:** `generate-rfp` and `release-to-finance` currently call the external RFP gateway
+  (`RfpGateway.generateRfp` / `notifyReleaseToFinance`) **inside** the database transaction
+  (`GenerateRfpUseCase` / `ReleaseToFinanceUseCase` in `TopSheetUseCases.kt`). Today the gateway is
+  a deterministic in-process stub (`SimulatedRfpGateway`), so this is safe.
+- **Risk when the real HTTP gateway lands (E1):** holding a transaction/connection open across a
+  network round-trip pins a Hikari connection (and any row locks) for the call's duration —
+  pool-exhaustion risk under load.
+- **Risk when the real HTTP gateway lands (E2):** the idempotency reservation lives in the same
+  transaction as the external call (`idempotent(...)` in `Idempotency.kt`). If the external call
+  succeeds but the transaction then rolls back, the reservation rolls back too — a retry re-calls the
+  external system and can **double-mint** RFP numbers.
+- **Target shape:** move the external call **outside** the DB transaction and adopt
+  reserve → call → persist (or a transactional outbox): persist a durable "in-progress" reservation,
+  call the gateway outside any tx, then persist the result in a second short tx. This bounds
+  connection hold time (E1) and makes the external side-effect replay-safe (E2).
+
 ---
 
 ## Module: Transfers

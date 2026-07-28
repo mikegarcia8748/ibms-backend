@@ -84,12 +84,17 @@ internal fun classify(
         if (ProrationEngine.isEligible(acc, providerId, billingPeriod, billedThisPeriod)) {
             val settled = settledByAccount[acc.id] ?: emptySet()
             val arrearsPeriods = ProrationEngine.missedPeriods(acc, billingPeriod, settled)
+            val prorated = ProrationEngine.proratedAmount(acc, billingPeriod)
+            val arrears = ProrationEngine.arrearsAmount(acc, billingPeriod, settled)
+            // Skip a zero-charge line: an account that prorates to 0.00 (e.g. dirty
+            // grace/termination dates) with no arrears has nothing to bill.
+            if (prorated.toMoney().signum() == 0 && arrears.toMoney().signum() == 0) continue
             billable += EligibleLine(
                 account = acc,
                 store = storesById[acc.storeId],
-                proratedAmount = ProrationEngine.proratedAmount(acc, billingPeriod),
+                proratedAmount = prorated,
                 isProrated = ProrationEngine.isFirstBillProrated(acc, billingPeriod),
-                arrearsAmount = ProrationEngine.arrearsAmount(acc, billingPeriod, settled),
+                arrearsAmount = arrears,
                 arrearsPeriods = arrearsPeriods,
             )
         } else if (ProrationEngine.isNotYetSubscribed(acc, billingPeriod)) {
@@ -220,7 +225,8 @@ class PayTopSheetUseCase(
                 if (ts.status != TopSheetStatus.APPROVED) {
                     throw DomainError.Conflict("only approved topsheets can be paid (was ${ts.status.name.lowercase()})")
                 }
-                topsheets.pay(id, cheque, clock.now()) ?: throw DomainError.NotFound("topsheet $id not found")
+                topsheets.pay(id, cheque, clock.now())
+                    ?: throw DomainError.Conflict("topsheet $id is no longer in approved status")
             }
         }
     }
@@ -232,16 +238,15 @@ class PayTopSheetUseCase(
 
 /**
  * Phase 1: create a DRAFT topsheet with eligible accounts for a provider/period.
- * Lines are pre-sorted by store branch code (descending) and assigned an
- * rfpSortOrder. RFP numbers are filled in later via [UpdateDraftLineUseCase].
+ * Lines are pre-sorted by store branch code (descending) and assigned an rfpSortOrder.
+ * The invoice and batch numbers are minted later, at confirm; RFP numbers are assigned
+ * after that by the external system (generate-rfp).
  */
 class CreateDraftTopSheetUseCase(
     private val accounts: AccountRepository,
     private val stores: StoreRepository,
     private val providers: ProviderRepository,
     private val topsheets: TopSheetRepository,
-    private val batchSequences: BatchSequenceRepository,
-    private val sequences: InvoiceSequenceRepository,
     private val idempotency: IdempotencyKeyRepository,
     private val activity: ActivityRecorder,
     private val clock: Clock,
@@ -276,16 +281,12 @@ class CreateDraftTopSheetUseCase(
                 )
             }
             val sortedLines = lines.sortedByDescending { it.store?.branchCode ?: "" }
-            val prefix = sequences.prefixOf(providerId) ?: InvoiceNumberFormatter.prefix(provider.name)
-            val batchSeq = batchSequences.nextValue(providerId)
-            val batchNumber = "${prefix}${billingPeriod.replace("-", "")}-B${batchSeq.toString().padStart(3, '0')}"
             val topsheet = topsheets.createDraft(
                 billingPeriod = billingPeriod,
                 providerId = providerId,
                 providerName = provider.name,
                 accountCount = sortedLines.size,
                 totalAmount = sortedLines.total(),
-                batchNumber = batchNumber,
                 compilerId = compilerId,
             )
             sortedLines.forEachIndexed { index, e ->
@@ -326,7 +327,9 @@ class UpdateDraftLineUseCase(
         lineId: String,
         proratedAmount: String?,
     ): TopSheetDetail = tx.inTransaction {
-        val ts = topsheets.findById(topsheetId)
+        // FOR UPDATE: serialize against a concurrent confirm/cancel so we never edit a
+        // line whose parent has just left DRAFT.
+        val ts = topsheets.findByIdForUpdate(topsheetId)
             ?: throw DomainError.NotFound("topsheet $topsheetId not found")
         if (ts.status != TopSheetStatus.DRAFT) {
             throw DomainError.Conflict("only draft topsheets can be edited (was ${ts.status.name.lowercase()})")
@@ -342,8 +345,15 @@ class UpdateDraftLineUseCase(
         if (parsed <= BigDecimal.ZERO) {
             throw DomainError.Validation("proratedAmount must be greater than zero")
         }
-        topsheets.findLines(topsheetId).find { it.id == lineId }
+        val line = topsheets.findLines(topsheetId).find { it.id == lineId }
             ?: throw DomainError.NotFound("line $lineId not found")
+        // A prorated amount is a within-period charge; it must never exceed the full
+        // monthly rate (guards against a fat-fingered override inflating the invoice).
+        if (parsed > line.fullAmount.toMoney()) {
+            throw DomainError.Validation(
+                "proratedAmount cannot exceed the line's full monthly charge (${line.fullAmount})",
+            )
+        }
         topsheets.updateLineAmount(lineId, proratedAmount)
             ?: throw DomainError.NotFound("line $lineId not found")
     }
@@ -458,8 +468,8 @@ class ReleaseToFinanceUseCase(
 }
 
 /**
- * Remove a line from a DRAFT topsheet. The last remaining line cannot be
- * removed — the entire draft must be deleted instead.
+ * Remove a line from a DRAFT topsheet. The last remaining line cannot be removed — the
+ * whole topsheet must be cancelled instead (see [CancelTopSheetUseCase]).
  */
 class RemoveDraftLineUseCase(
     private val topsheets: TopSheetRepository,
@@ -471,7 +481,9 @@ class RemoveDraftLineUseCase(
         lineId: String,
         callerId: String,
     ): Unit = tx.inTransaction {
-        val ts = topsheets.findById(topsheetId)
+        // FOR UPDATE: serialize the last-line check + delete against a concurrent
+        // confirm/cancel or another remove (so two removes can't empty the draft).
+        val ts = topsheets.findByIdForUpdate(topsheetId)
             ?: throw DomainError.NotFound("topsheet $topsheetId not found")
         if (ts.status != TopSheetStatus.DRAFT) {
             throw DomainError.Conflict("only draft topsheets can be edited (was ${ts.status.name.lowercase()})")
@@ -480,7 +492,7 @@ class RemoveDraftLineUseCase(
         lines.find { it.id == lineId }
             ?: throw DomainError.NotFound("line $lineId not found")
         if (lines.size == 1) {
-            throw DomainError.Conflict("Cannot remove all lines; delete the draft instead")
+            throw DomainError.Conflict("Cannot remove the last line; cancel the topsheet instead")
         }
         topsheets.removeLine(lineId)
         activity.record(callerId, "topsheet.line_removed", "topsheet", topsheetId)
@@ -488,16 +500,17 @@ class RemoveDraftLineUseCase(
 }
 
 /**
- * Phase 2: confirm a DRAFT topsheet — validates all RFP numbers are present,
- * re-checks eligibility (accounts may have changed since draft creation),
- * recalculates totals from current line values, mints the invoice number,
- * and transitions the topsheet to COMPILED.
+ * Phase 2: confirm a DRAFT topsheet — re-checks eligibility (accounts may have changed
+ * since draft creation), requires any arrears to be acknowledged, recalculates totals
+ * from current line values, mints the invoice and batch numbers, and transitions the
+ * topsheet to COMPILED. RFP numbers are assigned afterwards by the external system.
  */
 class ConfirmTopSheetUseCase(
     private val accounts: AccountRepository,
     private val stores: StoreRepository,
     private val topsheets: TopSheetRepository,
     private val sequences: InvoiceSequenceRepository,
+    private val batchSequences: BatchSequenceRepository,
     private val idempotency: IdempotencyKeyRepository,
     private val activity: ActivityRecorder,
     private val clock: Clock,
@@ -569,14 +582,43 @@ class ConfirmTopSheetUseCase(
                 .fold(BigDecimal.ZERO) { acc, l -> acc + l.proratedAmount.toMoney() + l.arrearsAmount.toMoney() }
                 .toMoneyString()
             val accountCount = lines.size
-            // Mint invoice number
+            // Mint the invoice + batch numbers here (both at confirm, not at draft, so
+            // an abandoned draft never consumes a sequence value).
             val sequence = sequences.nextValue(providerId)
             val prefix = sequences.prefixOf(providerId) ?: InvoiceNumberFormatter.prefix(ts.providerName ?: "")
             val invoiceNumber = InvoiceNumberFormatter.format(prefix, ts.billingPeriod, sequence)
-            val confirmed = topsheets.confirm(topsheetId, invoiceNumber, accountCount, totalAmount)
-                ?: throw DomainError.NotFound("topsheet $topsheetId not found")
+            val batchSeq = batchSequences.nextValue(providerId)
+            val batchNumber = "${prefix}${ts.billingPeriod.replace("-", "")}-B${batchSeq.toString().padStart(3, '0')}"
+            val confirmed = topsheets.confirm(topsheetId, invoiceNumber, batchNumber, accountCount, totalAmount, clock.now())
+                ?: throw DomainError.Conflict("topsheet $topsheetId is no longer in draft status")
             activity.record(confirmerId, "topsheet.compiled", "topsheet", topsheetId)
             confirmed
         }
+    }
+}
+
+/**
+ * Cancel/void a topsheet before RFP numbers are assigned. A DRAFT or COMPILED topsheet
+ * is moved to CANCELLED (the header is kept for audit) and its lines are deleted so the
+ * accounts become immediately re-billable. Blocked once the topsheet has reached
+ * RFP_ASSIGNED or beyond — at that point the external RFP transaction already exists.
+ */
+class CancelTopSheetUseCase(
+    private val topsheets: TopSheetRepository,
+    private val activity: ActivityRecorder,
+    private val tx: TransactionRunner,
+) {
+    suspend operator fun invoke(topsheetId: String, callerId: String): TopSheet = tx.inTransaction {
+        val ts = topsheets.findById(topsheetId)
+            ?: throw DomainError.NotFound("topsheet $topsheetId not found")
+        if (ts.status != TopSheetStatus.DRAFT && ts.status != TopSheetStatus.COMPILED) {
+            throw DomainError.Conflict(
+                "only draft or compiled topsheets can be cancelled (was ${ts.status.name.lowercase()})",
+            )
+        }
+        val cancelled = topsheets.cancel(topsheetId)
+            ?: throw DomainError.Conflict("topsheet $topsheetId is no longer in a cancellable status")
+        activity.record(callerId, "topsheet.cancelled", "topsheet", topsheetId)
+        cancelled
     }
 }

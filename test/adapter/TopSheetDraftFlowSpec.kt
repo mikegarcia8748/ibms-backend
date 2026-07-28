@@ -108,7 +108,7 @@ class TopSheetDraftFlowSpec : BehaviorSpec({
                     previewData["lines"]!!.jsonArray.size shouldBe 3
                     previewData.str("totalAmount") shouldBe "3000.00"
 
-                    // 2. Draft — 201, DRAFT status, batch number present
+                    // 2. Draft — 201, DRAFT status, no invoice/batch number yet (minted at confirm)
                     val draft = client.post("/topsheets/draft") {
                         header(HttpHeaders.Authorization, "Bearer $token")
                         contentType(ContentType.Application.Json)
@@ -117,9 +117,8 @@ class TopSheetDraftFlowSpec : BehaviorSpec({
                     draft.status shouldBe HttpStatusCode.Created
                     val draftData = draft.bodyAsText().asJson().data()
                     draftData.str("status") shouldBe "draft"
-                    val batchNumber = draftData.str("batchNumber")
-                    batchNumber.startsWith("CONV-") shouldBe true
-                    batchNumber.endsWith("-B001") shouldBe true
+                    draftData["batchNumber"] shouldBe JsonNull
+                    draftData["invoiceNumber"] shouldBe JsonNull
                     val draftId = draftData.str("id")
 
                     // 3. Lines — server returns them sorted by rfpSortOrder (branchCode DESC),
@@ -172,6 +171,10 @@ class TopSheetDraftFlowSpec : BehaviorSpec({
                     val confirmData = confirm.bodyAsText().asJson().data()
                     confirmData.str("status") shouldBe "compiled"
                     confirmData.str("invoiceNumber").startsWith("CONV-") shouldBe true
+                    // Batch number is minted here, at confirm (null during DRAFT).
+                    val batchNumber = confirmData.str("batchNumber")
+                    batchNumber.startsWith("CONV-") shouldBe true
+                    batchNumber.endsWith("-B001") shouldBe true
 
                     // 8. Generate RFP via the external (simulated) system → 200, every line
                     //    now carries an rfpNumber + rfpUniqueKey; topsheet moves to rfp_assigned.
@@ -442,6 +445,156 @@ class TopSheetDraftFlowSpec : BehaviorSpec({
                     second.status shouldBe HttpStatusCode.Conflict
                     second.bodyAsText().asJson().str("message") shouldBe
                         "a draft already exists for this provider/period"
+                }
+            }
+        }
+    }
+
+    Given("a DRAFT topsheet the secretary wants to discard") {
+        When("cancelling it, then drafting the same provider/period again") {
+            Then("cancel returns 200 'cancelled', its lines are gone, and a fresh draft succeeds") {
+                testApplication {
+                    application { testModule() }
+
+                    val token = signIn(UserRole.SYSADMIN).token
+                    val s = System.nanoTime().toString()
+
+                    val providerId = client.post("/providers") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                        contentType(ContentType.Application.Json)
+                        setBody("""{"name":"CancProv-$s","paymentScheduleDay":5}""")
+                    }.bodyAsText().asJson().data().str("id")
+
+                    val attachmentId = client.post("/attachments/presign/upload") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                        contentType(ContentType.Application.Json)
+                        setBody("""{"fileName":"p.txt","contentType":"text/plain","purpose":"installation_proof"}""")
+                    }.bodyAsText().asJson().data().str("attachmentId")
+
+                    val storeId = client.post("/stores") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                        contentType(ContentType.Application.Json)
+                        setBody(
+                            """{"storeType":"puregold","branchCode":"CA-$s","name":"Canc Store","proofOfInstallationId":"$attachmentId"}""",
+                        )
+                    }.bodyAsText().asJson().data().str("id")
+
+                    val proof = uploadPdfProof(token, "subscription_proof")
+                    client.post("/accounts") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                        contentType(ContentType.Application.Json)
+                        setBody(
+                            """{"accountNumber":"ca-$s-1","providerId":"$providerId","storeId":"$storeId","rate":"1000","installationDate":"2020-01-01","subscriptionProofIds":["$proof"]}""",
+                        )
+                    }.status shouldBe HttpStatusCode.Created
+
+                    val body = """{"providerId":"$providerId","billingPeriod":"$currentPeriod"}"""
+                    val draftId = client.post("/topsheets/draft") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                        contentType(ContentType.Application.Json)
+                        setBody(body)
+                    }.bodyAsText().asJson().data().str("id")
+
+                    // Cancel the DRAFT → 200, status 'cancelled'.
+                    val cancel = client.post("/topsheets/$draftId/cancel") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                    }
+                    cancel.status shouldBe HttpStatusCode.OK
+                    cancel.bodyAsText().asJson().data().str("status") shouldBe "cancelled"
+
+                    // Its lines are dropped so the account frees up.
+                    client.get("/topsheets/$draftId/lines") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                    }.bodyAsText().asJson().dataArr().size shouldBe 0
+
+                    // A fresh draft for the same provider/period now succeeds (block cleared).
+                    val redraft = client.post("/topsheets/draft") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                        contentType(ContentType.Application.Json)
+                        setBody(body)
+                    }
+                    redraft.status shouldBe HttpStatusCode.Created
+                    redraft.bodyAsText().asJson().data().str("status") shouldBe "draft"
+                }
+            }
+        }
+    }
+
+    Given("a COMPILED topsheet, and separately one already at rfp_assigned") {
+        When("cancelling each") {
+            Then("the COMPILED one voids and re-bills; the rfp_assigned one is rejected 409") {
+                testApplication {
+                    application { testModule() }
+
+                    val token = signIn(UserRole.SYSADMIN).token
+                    val s = System.nanoTime().toString()
+
+                    val providerId = client.post("/providers") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                        contentType(ContentType.Application.Json)
+                        setBody("""{"name":"CmpCancProv-$s","paymentScheduleDay":5}""")
+                    }.bodyAsText().asJson().data().str("id")
+
+                    val attachmentId = client.post("/attachments/presign/upload") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                        contentType(ContentType.Application.Json)
+                        setBody("""{"fileName":"p.txt","contentType":"text/plain","purpose":"installation_proof"}""")
+                    }.bodyAsText().asJson().data().str("attachmentId")
+
+                    val storeId = client.post("/stores") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                        contentType(ContentType.Application.Json)
+                        setBody(
+                            """{"storeType":"puregold","branchCode":"CB-$s","name":"Canc Store B","proofOfInstallationId":"$attachmentId"}""",
+                        )
+                    }.bodyAsText().asJson().data().str("id")
+
+                    val proof = uploadPdfProof(token, "subscription_proof")
+                    client.post("/accounts") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                        contentType(ContentType.Application.Json)
+                        setBody(
+                            """{"accountNumber":"cb-$s-1","providerId":"$providerId","storeId":"$storeId","rate":"1000","installationDate":"2020-01-01","subscriptionProofIds":["$proof"]}""",
+                        )
+                    }.status shouldBe HttpStatusCode.Created
+
+                    val body = """{"providerId":"$providerId","billingPeriod":"$currentPeriod"}"""
+
+                    // Draft → confirm → COMPILED, then cancel the COMPILED topsheet → 200 cancelled.
+                    val draftId = client.post("/topsheets/draft") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                        contentType(ContentType.Application.Json)
+                        setBody(body)
+                    }.bodyAsText().asJson().data().str("id")
+                    client.post("/topsheets/$draftId/confirm") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                    }.status shouldBe HttpStatusCode.OK
+                    val cancelCompiled = client.post("/topsheets/$draftId/cancel") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                    }
+                    cancelCompiled.status shouldBe HttpStatusCode.OK
+                    cancelCompiled.bodyAsText().asJson().data().str("status") shouldBe "cancelled"
+
+                    // The account is re-billable: a fresh draft compiles it again.
+                    val redraftId = client.post("/topsheets/draft") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                        contentType(ContentType.Application.Json)
+                        setBody(body)
+                    }.let {
+                        it.status shouldBe HttpStatusCode.Created
+                        it.bodyAsText().asJson().data().str("id")
+                    }
+
+                    // Push it to rfp_assigned; cancelling then is blocked with 409.
+                    client.post("/topsheets/$redraftId/confirm") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                    }.status shouldBe HttpStatusCode.OK
+                    client.post("/topsheets/$redraftId/generate-rfp") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                    }.status shouldBe HttpStatusCode.OK
+                    client.post("/topsheets/$redraftId/cancel") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                    }.status shouldBe HttpStatusCode.Conflict
                 }
             }
         }

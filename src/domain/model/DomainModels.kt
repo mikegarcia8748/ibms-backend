@@ -80,6 +80,10 @@ enum class TopSheetStatus {
     // external paid-callback flow.
     @SerialName("approved")     APPROVED,
     @SerialName("paid")         PAID,
+    // 'cancelled' is a secretary void of a DRAFT or COMPILED topsheet (before RFP
+    // numbers are assigned). The header is kept for audit; its lines are deleted so
+    // the accounts become re-billable.
+    @SerialName("cancelled")    CANCELLED,
 }
 
 @Serializable

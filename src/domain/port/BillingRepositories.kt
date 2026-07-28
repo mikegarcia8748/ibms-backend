@@ -37,6 +37,14 @@ interface TopSheetRepository {
     fun addLine(topsheetId: String, line: NewTopSheetLine)
 
     fun findById(id: String): TopSheet?
+
+    /**
+     * Like [findById] but takes a `SELECT … FOR UPDATE` row lock on the topsheet, so a
+     * caller that reads-then-writes (draft-line edit/remove) serializes against a
+     * concurrent status transition (confirm/cancel) instead of racing it.
+     */
+    fun findByIdForUpdate(id: String): TopSheet?
+
     fun list(providerId: String?, billingPeriod: String?, status: TopSheetStatus?): List<TopSheet>
     fun page(providerId: String?, billingPeriod: String?, status: TopSheetStatus?, cursor: String?, limit: Int): CursorPage<TopSheet>
 
@@ -78,20 +86,32 @@ interface TopSheetRepository {
      */
     fun pay(id: String, chequeNumber: String, at: Instant): TopSheet?
 
+    /**
+     * Void a topsheet: move DRAFT or COMPILED -> CANCELLED (status-guarded) and delete
+     * its lines so the accounts become re-billable. Returns null if the topsheet was
+     * neither DRAFT nor COMPILED.
+     */
+    fun cancel(id: String): TopSheet?
+
     fun createDraft(
         billingPeriod: String,
         providerId: String?,
         providerName: String?,
         accountCount: Int,
         totalAmount: String,
-        batchNumber: String,
         compilerId: String,
     ): TopSheet
 
     /** Edit a draft line's prorated amount (RFP is now assigned by the external system). */
     fun updateLineAmount(detailId: String, proratedAmount: String): TopSheetDetail?
     fun removeLine(detailId: String): Boolean
-    fun confirm(id: String, invoiceNumber: String, accountCount: Int, totalAmount: String): TopSheet?
+
+    /**
+     * Finalize a DRAFT (status-guarded) -> COMPILED: set the minted invoice + batch
+     * numbers, the recomputed account count/total, and stamp [at] as the compilation
+     * date. Returns null if the topsheet was no longer in DRAFT.
+     */
+    fun confirm(id: String, invoiceNumber: String, batchNumber: String, accountCount: Int, totalAmount: String, at: Instant): TopSheet?
 }
 
 interface TransferRepository {
