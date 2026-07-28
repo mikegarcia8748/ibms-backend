@@ -11,9 +11,7 @@ import com.puregoldbe.ibms.domain.model.TopSheet
 import com.puregoldbe.ibms.domain.model.TopSheetStatus
 import com.puregoldbe.ibms.domain.port.AccountRepository
 import com.puregoldbe.ibms.domain.port.ActivityRecorder
-import com.puregoldbe.ibms.domain.port.BatchSequenceRepository
 import com.puregoldbe.ibms.domain.port.IdempotencyContext
-import com.puregoldbe.ibms.domain.port.InvoiceSequenceRepository
 import com.puregoldbe.ibms.domain.port.NewTopSheetLine
 import com.puregoldbe.ibms.domain.port.ProviderRepository
 import com.puregoldbe.ibms.domain.port.StoreRepository
@@ -55,8 +53,9 @@ private fun acct(id: String, storeId: String) = Account(
     status = AccountStatus.ACTIVE, createdAt = Instant.fromEpochSeconds(0),
 )
 
+// A draft has no invoice or batch number yet — both are minted at confirm.
 private val draftTopsheet = TopSheet(
-    id = "ts1", invoiceNumber = null, batchNumber = "CONV-202607-B001", billingPeriod = "2026-07",
+    id = "ts1", invoiceNumber = null, batchNumber = null, billingPeriod = "2026-07",
     providerId = "p1", providerName = "Converge", accountCount = 3, totalAmount = "3000.00",
     status = TopSheetStatus.DRAFT, compilerId = "compiler", compilationDate = Instant.fromEpochSeconds(0),
 )
@@ -64,7 +63,8 @@ private val draftTopsheet = TopSheet(
 /**
  * Unit specs for Phase 1 of two-phase compilation: creating a DRAFT topsheet. Proven
  * with mocks + fakes (no DB). The ProrationEngine is exercised for real since it is a
- * pure domain service, so eligibility/amount math is covered transitively.
+ * pure domain service, so eligibility/amount math is covered transitively. Invoice and
+ * batch numbers are NOT minted here — they are minted at confirm.
  */
 class CreateDraftTopSheetUseCaseSpec : BehaviorSpec({
     isolationMode = IsolationMode.InstancePerLeaf
@@ -73,12 +73,10 @@ class CreateDraftTopSheetUseCaseSpec : BehaviorSpec({
     val stores = mockk<StoreRepository>()
     val providers = mockk<ProviderRepository>()
     val topsheets = mockk<TopSheetRepository>(relaxed = true)
-    val batchSequences = mockk<BatchSequenceRepository>()
-    val sequences = mockk<InvoiceSequenceRepository>()
     val idempotency = FakeIdempotencyKeyRepository()
     val activity = mockk<ActivityRecorder>(relaxed = true)
     val useCase = CreateDraftTopSheetUseCase(
-        accounts, stores, providers, topsheets, batchSequences, sequences, idempotency, activity, clock,
+        accounts, stores, providers, topsheets, idempotency, activity, clock,
         ImmediateTransactionRunner(),
     )
 
@@ -88,21 +86,20 @@ class CreateDraftTopSheetUseCaseSpec : BehaviorSpec({
         // Deliberately unordered so the sort-by-branchCode-DESC is observable.
         every { accounts.list(null, "p1", null) } returns listOf(acct("a3", "s2"), acct("a1", "s1"), acct("a2", "s1"))
         every { topsheets.billedAccountIds("2026-07") } returns emptySet()
-        every { sequences.prefixOf("p1") } returns "CONV-"
-        every { batchSequences.nextValue("p1") } returns 1
-        every { topsheets.createDraft(any(), any(), any(), any(), any(), any(), any()) } returns draftTopsheet
+        every { topsheets.createDraft(any(), any(), any(), any(), any(), any()) } returns draftTopsheet
 
         When("creating a draft") {
             val captured = mutableListOf<NewTopSheetLine>()
             every { topsheets.addLine(any(), any()) } answers { captured.add(secondArg<NewTopSheetLine>()) }
             val result = useCase("p1", "2026-07", "compiler")
 
-            Then("creates a DRAFT topsheet sorted by branchCode DESC with rfpSortOrder and batch number") {
+            Then("creates a DRAFT topsheet sorted by branchCode DESC with rfpSortOrder (no batch/invoice yet)") {
                 result.id shouldBe "ts1"
                 result.status shouldBe TopSheetStatus.DRAFT
-                result.batchNumber shouldBe "CONV-202607-B001"
+                result.batchNumber shouldBe null
+                result.invoiceNumber shouldBe null
                 verify(exactly = 1) {
-                    topsheets.createDraft("2026-07", "p1", "Converge", 3, "3000.00", "CONV-202607-B001", "compiler")
+                    topsheets.createDraft("2026-07", "p1", "Converge", 3, "3000.00", "compiler")
                 }
                 captured.size shouldBe 3
                 // 118 descends before 050, so the two 118-store accounts come first.
@@ -137,10 +134,10 @@ class CreateDraftTopSheetUseCaseSpec : BehaviorSpec({
         every { topsheets.billedAccountIds("2026-07") } returns setOf("a1", "a2")
 
         When("creating a draft") {
-            Then("it is rejected with a Conflict (nothing_to_compile)") {
+            Then("it is rejected with a Conflict (nothing_to_compile), no draft created") {
                 val err = shouldThrow<DomainError.Conflict> { useCase("p1", "2026-07", "compiler") }
                 err.code shouldBe "nothing_to_compile"
-                verify(exactly = 0) { batchSequences.nextValue(any()) }
+                verify(exactly = 0) { topsheets.createDraft(any(), any(), any(), any(), any(), any()) }
             }
         }
     }
@@ -150,9 +147,7 @@ class CreateDraftTopSheetUseCaseSpec : BehaviorSpec({
         every { stores.list(null, null) } returns listOf(store118)
         every { accounts.list(null, "p1", null) } returns listOf(acct("a1", "s1"), acct("a2", "s-missing"))
         every { topsheets.billedAccountIds("2026-07") } returns emptySet()
-        every { sequences.prefixOf("p1") } returns "CONV-"
-        every { batchSequences.nextValue("p1") } returns 1
-        every { topsheets.createDraft(any(), any(), any(), any(), any(), any(), any()) } returns draftTopsheet
+        every { topsheets.createDraft(any(), any(), any(), any(), any(), any()) } returns draftTopsheet
 
         When("creating a draft") {
             val captured = mutableListOf<NewTopSheetLine>()
@@ -188,8 +183,7 @@ class CreateDraftTopSheetUseCaseSpec : BehaviorSpec({
             Then("it is rejected with a Conflict instead of a raw 500 from the unique index") {
                 val err = shouldThrow<DomainError.Conflict> { useCase("p1", "2026-07", "compiler") }
                 err.message shouldBe "a draft already exists for this provider/period"
-                verify(exactly = 0) { batchSequences.nextValue(any()) }
-                verify(exactly = 0) { topsheets.createDraft(any(), any(), any(), any(), any(), any(), any()) }
+                verify(exactly = 0) { topsheets.createDraft(any(), any(), any(), any(), any(), any()) }
                 verify(exactly = 0) { topsheets.addLine(any(), any()) }
             }
         }
@@ -200,9 +194,7 @@ class CreateDraftTopSheetUseCaseSpec : BehaviorSpec({
         every { stores.list(null, null) } returns listOf(store118, store050)
         every { accounts.list(null, "p1", null) } returns listOf(acct("a3", "s2"), acct("a1", "s1"), acct("a2", "s1"))
         every { topsheets.billedAccountIds("2026-07") } returns emptySet()
-        every { sequences.prefixOf("p1") } returns "CONV-"
-        every { batchSequences.nextValue("p1") } returns 1
-        every { topsheets.createDraft(any(), any(), any(), any(), any(), any(), any()) } returns draftTopsheet
+        every { topsheets.createDraft(any(), any(), any(), any(), any(), any()) } returns draftTopsheet
         val ctx = IdempotencyContext(key = "idem-1", requestHash = "hash-1", userId = "compiler")
 
         When("creating a draft twice with the same key") {
@@ -212,7 +204,7 @@ class CreateDraftTopSheetUseCaseSpec : BehaviorSpec({
             Then("the second call replays the stored result and createDraft ran only once") {
                 first.id shouldBe "ts1"
                 second.id shouldBe "ts1"
-                verify(exactly = 1) { topsheets.createDraft(any(), any(), any(), any(), any(), any(), any()) }
+                verify(exactly = 1) { topsheets.createDraft(any(), any(), any(), any(), any(), any()) }
                 verify(exactly = 3) { topsheets.addLine(eq("ts1"), any()) }
             }
         }

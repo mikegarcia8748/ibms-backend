@@ -132,12 +132,13 @@ fun Application.moduleWith(cfg: AppConfig) {
     val getTopSheet = GetTopSheetUseCase(topsheets, tx)
     val getTopSheetDetails = GetTopSheetDetailsUseCase(topsheets, tx)
     val payTopSheet = PayTopSheetUseCase(topsheets, idempotency, clock, tx)
-    val createDraftTopSheet = CreateDraftTopSheetUseCase(accounts, stores, providers, topsheets, batchSequences, sequences, idempotency, activities, clock, tx)
+    val createDraftTopSheet = CreateDraftTopSheetUseCase(accounts, stores, providers, topsheets, idempotency, activities, clock, tx)
     val updateDraftLine = UpdateDraftLineUseCase(topsheets, tx)
     val generateRfp = GenerateRfpUseCase(topsheets, rfpGateway, idempotency, activities, tx)
     val releaseToFinance = ReleaseToFinanceUseCase(topsheets, rfpGateway, activities, clock, tx)
     val removeDraftLine = RemoveDraftLineUseCase(topsheets, activities, tx)
-    val confirmTopSheet = ConfirmTopSheetUseCase(accounts, stores, topsheets, sequences, idempotency, activities, clock, tx)
+    val confirmTopSheet = ConfirmTopSheetUseCase(accounts, stores, topsheets, sequences, batchSequences, idempotency, activities, clock, tx)
+    val cancelTopSheet = CancelTopSheetUseCase(topsheets, activities, tx)
     val exportTopSheet = ExportTopSheetExcelUseCase(topsheets, tx)
     val exportAccounts = ExportAccountsExcelUseCase(accounts, providers, tx)
     val exportChequePdf = GenerateChequePaymentPdfUseCase(topsheets, tx)
@@ -199,8 +200,8 @@ fun Application.moduleWith(cfg: AppConfig) {
             ocrRoutes(triggerOcr, listOcrBatches, getOcrBatchRows, listOcrTemplates, createOcrTemplate, updateOcrTemplate)
             topSheetRoutes(
                 previewCompilation, createDraftTopSheet, updateDraftLine,
-                generateRfp, releaseToFinance, removeDraftLine, confirmTopSheet, listTopSheets, getTopSheet,
-                getTopSheetDetails, payTopSheet,
+                generateRfp, releaseToFinance, removeDraftLine, confirmTopSheet, cancelTopSheet,
+                listTopSheets, getTopSheet, getTopSheetDetails, payTopSheet,
             )
             exportRoutes(exportTopSheet, exportAccounts, exportChequePdf, exportChequeCsv)
             dashboardRoutes(dashboardSummary, listDashboardAccounts, listBillingHistory, listStores, exportAccounts)

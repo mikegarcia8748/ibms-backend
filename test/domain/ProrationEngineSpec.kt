@@ -161,6 +161,63 @@ class ProrationEngineSpec : BehaviorSpec({
         }
     }
 
+    // --- Calendar boundaries: leap February, single active day, year rollover, rounding tie. ---
+
+    Given("an account installed mid-way through a leap-year February") {
+        // 2028 is a leap year -> Feb has 29 days. Installed the 15th: 15 active days of 29.
+        val acc = account(rate = "1000", installationDate = LocalDate(2028, 2, 15))
+        Then("proration uses 29 days (15/29 = 517.24)") {
+            ProrationEngine.proratedAmount(acc, "2028-02") shouldBe "517.24"
+        }
+    }
+
+    Given("an account installed on the last day of a 31-day month") {
+        // Installed 2026-08-31 -> exactly 1 active day of 31.
+        val acc = account(rate = "1000", installationDate = LocalDate(2026, 8, 31))
+        Then("a single active day is billed (1/31 = 32.26)") {
+            ProrationEngine.proratedAmount(acc, "2026-08") shouldBe "32.26"
+        }
+    }
+
+    Given("arrears spanning a December -> January year boundary") {
+        // Subscribed and entered the system 2025-11-15; billing 2026-01, nothing settled.
+        val acc = account(
+            rate = "1000",
+            installationDate = LocalDate(2025, 11, 15),
+            createdAt = Instant.parse("2025-11-15T00:00:00Z"),
+        )
+        Then("missedPeriods rolls Nov -> Dec -> stops at Jan; arrears sum both") {
+            ProrationEngine.missedPeriods(acc, "2026-01", emptySet()) shouldBe listOf("2025-11", "2025-12")
+            // Nov: 16/30 = 533.33 ; Dec: full 1000.00
+            ProrationEngine.arrearsAmount(acc, "2026-01", emptySet()) shouldBe "1533.33"
+        }
+    }
+
+    Given("a proration that lands exactly on a half-centavo") {
+        // rate 1000.05, installed 2026-09-16 -> 15 active days of 30 = 500.025 exactly.
+        val acc = account(rate = "1000.05", installationDate = LocalDate(2026, 9, 16))
+        Then("it rounds half-up (500.025 -> 500.03, not 500.02)") {
+            ProrationEngine.proratedAmount(acc, "2026-09") shouldBe "500.03"
+        }
+    }
+
+    Given("an eligible account whose grace ended before its own subscription start (dirty data)") {
+        // contract starts the 25th, but termination grace ended the 10th of the same month:
+        // 0 active days. The account is still 'eligible', so it would mint a 0.00 line unless
+        // the compile classifier filters it (C2).
+        val acc = account(
+            rate = "1000",
+            installationDate = LocalDate(2020, 1, 1),
+            status = AccountStatus.TERMINATION_REQUESTED,
+            terminationRequestedAt = Instant.parse("2026-07-11T00:00:00Z"), // +30d -> 2026-08-10
+            contractStartDate = LocalDate(2026, 8, 25),
+        )
+        Then("it prorates to 0.00 yet reports eligible — the case the zero-charge filter drops") {
+            ProrationEngine.proratedAmount(acc, "2026-08") shouldBe "0.00"
+            ProrationEngine.isEligible(acc, "p1", "2026-08", emptySet()) shouldBe true
+        }
+    }
+
     Given("provider names") {
         Then("acronyms match the legacy getProviderAcronym") {
             InvoiceNumberFormatter.acronym("Converge") shouldBe "CONV"
