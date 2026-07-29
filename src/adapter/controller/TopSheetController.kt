@@ -1,6 +1,7 @@
 package com.puregoldbe.ibms.adapter.controller
 
 import com.puregoldbe.ibms.adapter.security.authorize
+import com.puregoldbe.ibms.application.usecase.CancelTopSheetUseCase
 import com.puregoldbe.ibms.application.usecase.ConfirmTopSheetUseCase
 import com.puregoldbe.ibms.application.usecase.CreateDraftTopSheetUseCase
 import com.puregoldbe.ibms.application.usecase.GenerateRfpUseCase
@@ -28,6 +29,7 @@ fun Route.topSheetRoutes(
     releaseToFinance: ReleaseToFinanceUseCase,
     removeLine: RemoveDraftLineUseCase,
     confirmDraft: ConfirmTopSheetUseCase,
+    cancel: CancelTopSheetUseCase,
     list: ListTopSheetsUseCase,
     get: GetTopSheetUseCase,
     details: GetTopSheetDetailsUseCase,
@@ -89,6 +91,10 @@ fun Route.topSheetRoutes(
             val req = runCatching { call.receiveNullable<ConfirmRequest>() }.getOrNull() ?: ConfirmRequest()
             val idem = call.idempotencyContext(caller.userId, "topsheet.confirm:${call.pathId()}")
             call.ok(confirmDraft(call.pathId(), caller.userId, req.acknowledgeArrears, idem))
+        }
+        post("/{id}/cancel") {
+            val caller = call.authorize(UserRole.SECRETARY)
+            call.ok(cancel(call.pathId(), caller.userId))
         }
         get("/{id}") {
             call.authorize()

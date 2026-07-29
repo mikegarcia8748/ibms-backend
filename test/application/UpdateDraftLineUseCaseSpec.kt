@@ -41,22 +41,34 @@ class UpdateDraftLineUseCaseSpec : BehaviorSpec({
     val useCase = UpdateDraftLineUseCase(topsheets, ImmediateTransactionRunner())
 
     Given("a DRAFT topsheet with a line belonging to it") {
-        every { topsheets.findById("ts1") } returns draftTopsheet()
+        every { topsheets.findByIdForUpdate("ts1") } returns draftTopsheet()
         every { topsheets.findLines("ts1") } returns listOf(line("l1"))
-        every { topsheets.updateLineAmount("l1", "1200.00") } returns line("l1", "1200.00")
+        every { topsheets.updateLineAmount("l1", "950.00") } returns line("l1", "950.00")
 
-        When("overriding the prorated amount") {
-            val result = useCase("ts1", "l1", "1200.00")
+        When("overriding the prorated amount (within the full monthly charge)") {
+            val result = useCase("ts1", "l1", "950.00")
 
             Then("the line is updated") {
-                result.proratedAmount shouldBe "1200.00"
-                verify(exactly = 1) { topsheets.updateLineAmount("l1", "1200.00") }
+                result.proratedAmount shouldBe "950.00"
+                verify(exactly = 1) { topsheets.updateLineAmount("l1", "950.00") }
+            }
+        }
+    }
+
+    Given("a DRAFT topsheet and an override above the line's full monthly charge") {
+        every { topsheets.findByIdForUpdate("ts1") } returns draftTopsheet()
+        every { topsheets.findLines("ts1") } returns listOf(line("l1"))
+
+        When("editing with an amount greater than fullAmount (1000.00)") {
+            Then("it is rejected with a Validation error (cannot exceed the full charge)") {
+                shouldThrow<DomainError.Validation> { useCase("ts1", "l1", "5000.00") }
+                verify(exactly = 0) { topsheets.updateLineAmount(any(), any()) }
             }
         }
     }
 
     Given("a topsheet that is no longer DRAFT (already COMPILED)") {
-        every { topsheets.findById("ts1") } returns draftTopsheet(TopSheetStatus.COMPILED)
+        every { topsheets.findByIdForUpdate("ts1") } returns draftTopsheet(TopSheetStatus.COMPILED)
 
         When("editing a line") {
             Then("it is rejected with a Conflict") {
@@ -67,7 +79,7 @@ class UpdateDraftLineUseCaseSpec : BehaviorSpec({
     }
 
     Given("a lineId that does not belong to the stated DRAFT topsheet") {
-        every { topsheets.findById("ts1") } returns draftTopsheet()
+        every { topsheets.findByIdForUpdate("ts1") } returns draftTopsheet()
         every { topsheets.findLines("ts1") } returns listOf(line("l1"))
 
         When("attempting to edit a foreign lineId under this topsheet's authorization") {
@@ -79,7 +91,7 @@ class UpdateDraftLineUseCaseSpec : BehaviorSpec({
     }
 
     Given("a DRAFT topsheet and a PATCH with no proratedAmount") {
-        every { topsheets.findById("ts1") } returns draftTopsheet()
+        every { topsheets.findByIdForUpdate("ts1") } returns draftTopsheet()
 
         When("editing with a null amount") {
             Then("it is rejected with a Validation error instead of a silent no-op 200") {
@@ -91,7 +103,7 @@ class UpdateDraftLineUseCaseSpec : BehaviorSpec({
     }
 
     Given("a DRAFT topsheet and a non-decimal proratedAmount") {
-        every { topsheets.findById("ts1") } returns draftTopsheet()
+        every { topsheets.findByIdForUpdate("ts1") } returns draftTopsheet()
 
         When("editing with garbage text as the amount") {
             Then("it is rejected with a Validation error") {
@@ -101,7 +113,7 @@ class UpdateDraftLineUseCaseSpec : BehaviorSpec({
     }
 
     Given("a DRAFT topsheet and a blank proratedAmount") {
-        every { topsheets.findById("ts1") } returns draftTopsheet()
+        every { topsheets.findByIdForUpdate("ts1") } returns draftTopsheet()
 
         When("editing with an empty string as the amount") {
             Then("it is rejected with a Validation error instead of silently becoming 0.00") {
@@ -112,7 +124,7 @@ class UpdateDraftLineUseCaseSpec : BehaviorSpec({
     }
 
     Given("a DRAFT topsheet and a negative proratedAmount") {
-        every { topsheets.findById("ts1") } returns draftTopsheet()
+        every { topsheets.findByIdForUpdate("ts1") } returns draftTopsheet()
 
         When("editing with a negative amount") {
             Then("it is rejected with a Validation error") {
@@ -123,7 +135,7 @@ class UpdateDraftLineUseCaseSpec : BehaviorSpec({
     }
 
     Given("a DRAFT topsheet and a zero proratedAmount") {
-        every { topsheets.findById("ts1") } returns draftTopsheet()
+        every { topsheets.findByIdForUpdate("ts1") } returns draftTopsheet()
 
         When("editing with an amount of exactly 0.00") {
             Then("it is rejected with a Validation error") {
@@ -133,7 +145,7 @@ class UpdateDraftLineUseCaseSpec : BehaviorSpec({
     }
 
     Given("an unknown topsheet id") {
-        every { topsheets.findById("nope") } returns null
+        every { topsheets.findByIdForUpdate("nope") } returns null
 
         When("editing a line") {
             Then("it fails as NotFound") {

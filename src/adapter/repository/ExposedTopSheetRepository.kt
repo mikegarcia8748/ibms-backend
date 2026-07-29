@@ -54,6 +54,14 @@ class ExposedTopSheetRepository : TopSheetRepository {
         return TopSheets.selectAll().where { TopSheets.id eq uuid }.map { it.toTopSheet() }.singleOrNull()
     }
 
+    override fun findByIdForUpdate(id: String): TopSheet? {
+        val uuid = id.toUuidOrNull() ?: return null
+        return TopSheets.selectAll().where { TopSheets.id eq uuid }
+            .forUpdate()
+            .map { it.toTopSheet() }
+            .singleOrNull()
+    }
+
     override fun list(providerId: String?, billingPeriod: String?, status: TopSheetStatus?): List<TopSheet> =
         TopSheets.selectAll()
             .apply { if (providerId != null) andWhere { TopSheets.providerId eq providerId.toUuid() } }
@@ -184,13 +192,30 @@ class ExposedTopSheetRepository : TopSheetRepository {
         return findById(id)
     }
 
+    override fun cancel(id: String): TopSheet? {
+        val uuid = id.toUuidOrNull() ?: return null
+        // Status-guarded: only a DRAFT or COMPILED topsheet can be voided (before RFP
+        // numbers are assigned). Losing a race with confirm/generate-rfp writes nothing.
+        val n = TopSheets.update({
+            (TopSheets.id eq uuid) and
+                (TopSheets.status inList listOf(TopSheetStatus.DRAFT, TopSheetStatus.COMPILED))
+        }) {
+            it[TopSheets.status] = TopSheetStatus.CANCELLED
+        }
+        if (n == 0) return null
+        // Drop the lines so the account/period slots free up for re-billing — the
+        // uq_account_per_period unique index is status-blind. The header keeps its
+        // accountCount/totalAmount snapshot for audit.
+        TopSheetDetails.deleteWhere { TopSheetDetails.topsheetId eq uuid }
+        return findById(id)
+    }
+
     override fun createDraft(
         billingPeriod: String,
         providerId: String?,
         providerName: String?,
         accountCount: Int,
         totalAmount: String,
-        batchNumber: String,
         compilerId: String,
     ): TopSheet {
         val id = TopSheets.insertAndGetId { row ->
@@ -199,7 +224,7 @@ class ExposedTopSheetRepository : TopSheetRepository {
             if (providerName != null) row[TopSheets.providerName] = providerName
             row[TopSheets.accountCount] = accountCount
             row[TopSheets.totalAmount] = totalAmount.toMoney()
-            row[TopSheets.batchNumber] = batchNumber
+            // batchNumber stays null on a draft — it is minted at confirm.
             row[TopSheets.status] = TopSheetStatus.DRAFT
             row[TopSheets.compilerId] = EntityID(compilerId.toUuid(), Users)
         }.value
@@ -220,13 +245,22 @@ class ExposedTopSheetRepository : TopSheetRepository {
         return TopSheetDetails.deleteWhere { TopSheetDetails.id eq uuid } > 0
     }
 
-    override fun confirm(id: String, invoiceNumber: String, accountCount: Int, totalAmount: String): TopSheet? {
+    override fun confirm(
+        id: String,
+        invoiceNumber: String,
+        batchNumber: String,
+        accountCount: Int,
+        totalAmount: String,
+        at: Instant,
+    ): TopSheet? {
         val uuid = id.toUuidOrNull() ?: return null
         val n = TopSheets.update({ (TopSheets.id eq uuid) and (TopSheets.status eq TopSheetStatus.DRAFT) }) {
             it[TopSheets.status] = TopSheetStatus.COMPILED
             it[TopSheets.invoiceNumber] = invoiceNumber
+            it[TopSheets.batchNumber] = batchNumber
             it[TopSheets.accountCount] = accountCount
             it[TopSheets.totalAmount] = totalAmount.toMoney()
+            it[TopSheets.compilationDate] = at.jt()
         }
         return if (n == 0) null else findById(id)
     }

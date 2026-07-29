@@ -10,12 +10,12 @@ import com.puregoldbe.ibms.domain.model.TopSheetLineStatus
 import com.puregoldbe.ibms.domain.model.TopSheetStatus
 import com.puregoldbe.ibms.domain.port.AccountRepository
 import com.puregoldbe.ibms.domain.port.ActivityRecorder
+import com.puregoldbe.ibms.domain.port.BatchSequenceRepository
 import com.puregoldbe.ibms.domain.port.IdempotencyContext
 import com.puregoldbe.ibms.domain.port.IdempotencyKeyRepository
 import com.puregoldbe.ibms.domain.port.InvoiceSequenceRepository
 import com.puregoldbe.ibms.domain.port.StoreRepository
 import com.puregoldbe.ibms.domain.port.TopSheetRepository
-import com.puregoldbe.ibms.domain.port.TransactionRunner
 import com.puregoldbe.ibms.support.FakeClock
 import com.puregoldbe.ibms.support.FakeIdempotencyKeyRepository
 import com.puregoldbe.ibms.support.ImmediateTransactionRunner
@@ -32,8 +32,9 @@ import kotlinx.datetime.LocalDate
 
 private val clock = FakeClock(Instant.parse("2026-07-15T08:00:00Z"))
 
+// A draft has no invoice or batch number yet — both are minted at confirm.
 private val draftTopsheet = TopSheet(
-    id = "ts1", invoiceNumber = null, batchNumber = "CONV-202607-B001", billingPeriod = "2026-07",
+    id = "ts1", invoiceNumber = null, batchNumber = null, billingPeriod = "2026-07",
     providerId = "p1", providerName = "Converge", accountCount = 2, totalAmount = "2000.00",
     status = TopSheetStatus.DRAFT, compilerId = "compiler", compilationDate = Instant.fromEpochSeconds(0),
 )
@@ -68,7 +69,8 @@ private fun line(
 /**
  * Unit specs for Phase 2 of two-phase compilation: confirming a DRAFT topsheet. Proven
  * with mocks + fakes (no DB). Verifies the re-eligibility guard, double-billing guard,
- * and the idempotent replay of a successful confirmation.
+ * the invoice + batch numbers minted here, and the idempotent replay of a successful
+ * confirmation.
  */
 class ConfirmTopSheetUseCaseSpec : BehaviorSpec({
     isolationMode = IsolationMode.InstancePerLeaf
@@ -77,10 +79,12 @@ class ConfirmTopSheetUseCaseSpec : BehaviorSpec({
     val stores = mockk<StoreRepository>(relaxed = true)
     val topsheets = mockk<TopSheetRepository>(relaxed = true)
     val sequences = mockk<InvoiceSequenceRepository>()
+    val batchSequences = mockk<BatchSequenceRepository>()
     val idempotency: IdempotencyKeyRepository = FakeIdempotencyKeyRepository()
     val activity = mockk<ActivityRecorder>(relaxed = true)
     val useCase = ConfirmTopSheetUseCase(
-        accounts, stores, topsheets, sequences, idempotency, activity, clock, ImmediateTransactionRunner(),
+        accounts, stores, topsheets, sequences, batchSequences, idempotency, activity, clock,
+        ImmediateTransactionRunner(),
     )
 
     Given("a DRAFT topsheet with all RFP numbers present and all accounts still eligible") {
@@ -92,18 +96,21 @@ class ConfirmTopSheetUseCaseSpec : BehaviorSpec({
         every { topsheets.billedAccountIds("2026-07") } returns emptySet()
         every { sequences.nextValue("p1") } returns 1
         every { sequences.prefixOf("p1") } returns "CONV-"
-        every { topsheets.confirm(any(), any(), any(), any()) } returns compiledTopsheet
+        every { batchSequences.nextValue("p1") } returns 1
+        every { topsheets.confirm(any(), any(), any(), any(), any(), any()) } returns compiledTopsheet
 
         When("confirming") {
             val result = useCase("ts1", "confirmer")
 
-            Then("mints the invoice number and returns a COMPILED topsheet") {
+            Then("mints the invoice + batch numbers and returns a COMPILED topsheet") {
                 result.id shouldBe "ts1"
                 result.status shouldBe TopSheetStatus.COMPILED
                 result.invoiceNumber shouldBe "CONV-202607-0001"
+                result.batchNumber shouldBe "CONV-202607-B001"
                 verify(exactly = 1) {
-                    topsheets.confirm("ts1", "CONV-202607-0001", 2, "2000.00")
+                    topsheets.confirm("ts1", "CONV-202607-0001", "CONV-202607-B001", 2, "2000.00", any())
                 }
+                verify(exactly = 1) { batchSequences.nextValue("p1") }
                 verify { activity.record("confirmer", "topsheet.compiled", "topsheet", "ts1") }
             }
         }
@@ -118,14 +125,17 @@ class ConfirmTopSheetUseCaseSpec : BehaviorSpec({
         every { topsheets.billedAccountIds("2026-07") } returns emptySet()
         every { sequences.nextValue("p1") } returns 1
         every { sequences.prefixOf("p1") } returns "CONV-"
-        every { topsheets.confirm(any(), any(), any(), any()) } returns compiledTopsheet
+        every { batchSequences.nextValue("p1") } returns 1
+        every { topsheets.confirm(any(), any(), any(), any(), any(), any()) } returns compiledTopsheet
 
         When("confirming") {
             val result = useCase("ts1", "confirmer")
 
             Then("it still compiles — RFP is no longer required at confirm time") {
                 result.status shouldBe TopSheetStatus.COMPILED
-                verify(exactly = 1) { topsheets.confirm("ts1", "CONV-202607-0001", 2, "2000.00") }
+                verify(exactly = 1) {
+                    topsheets.confirm("ts1", "CONV-202607-0001", "CONV-202607-B001", 2, "2000.00", any())
+                }
             }
         }
     }
@@ -153,7 +163,7 @@ class ConfirmTopSheetUseCaseSpec : BehaviorSpec({
             Then("it is rejected with a Conflict naming the ineligible account") {
                 val err = shouldThrow<DomainError.Conflict> { useCase("ts1", "confirmer") }
                 err.message shouldContain "a2"
-                verify(exactly = 0) { topsheets.confirm(any(), any(), any(), any()) }
+                verify(exactly = 0) { topsheets.confirm(any(), any(), any(), any(), any(), any()) }
             }
         }
     }
@@ -170,7 +180,7 @@ class ConfirmTopSheetUseCaseSpec : BehaviorSpec({
             Then("it is rejected with a Conflict naming the double-billed account") {
                 val err = shouldThrow<DomainError.Conflict> { useCase("ts1", "confirmer") }
                 err.message shouldContain "a2"
-                verify(exactly = 0) { topsheets.confirm(any(), any(), any(), any()) }
+                verify(exactly = 0) { topsheets.confirm(any(), any(), any(), any(), any(), any()) }
             }
         }
     }
@@ -213,12 +223,13 @@ class ConfirmTopSheetUseCaseSpec : BehaviorSpec({
         every { topsheets.billedAccountIds("2026-07") } returns emptySet()
         every { sequences.nextValue("p1") } returns 1
         every { sequences.prefixOf("p1") } returns "CONV-"
-        every { topsheets.confirm(any(), any(), any(), any()) } returns compiledTopsheet
+        every { batchSequences.nextValue("p1") } returns 1
+        every { topsheets.confirm(any(), any(), any(), any(), any(), any()) } returns compiledTopsheet
 
         When("confirming without acknowledging arrears") {
             Then("it is rejected with a Validation error") {
                 shouldThrow<DomainError.Validation> { useCase("ts1", "confirmer") }
-                verify(exactly = 0) { topsheets.confirm(any(), any(), any(), any()) }
+                verify(exactly = 0) { topsheets.confirm(any(), any(), any(), any(), any(), any()) }
             }
         }
 
@@ -226,7 +237,9 @@ class ConfirmTopSheetUseCaseSpec : BehaviorSpec({
             useCase("ts1", "confirmer", acknowledgeArrears = true)
 
             Then("the total includes the arrears (2 × 1000 + 500)") {
-                verify(exactly = 1) { topsheets.confirm("ts1", "CONV-202607-0001", 2, "2500.00") }
+                verify(exactly = 1) {
+                    topsheets.confirm("ts1", "CONV-202607-0001", "CONV-202607-B001", 2, "2500.00", any())
+                }
             }
         }
     }
@@ -248,7 +261,7 @@ class ConfirmTopSheetUseCaseSpec : BehaviorSpec({
                     useCase("ts1", "confirmer", acknowledgeArrears = true)
                 }
                 err.message shouldContain "a2"
-                verify(exactly = 0) { topsheets.confirm(any(), any(), any(), any()) }
+                verify(exactly = 0) { topsheets.confirm(any(), any(), any(), any(), any(), any()) }
                 verify(exactly = 0) { sequences.nextValue(any()) }
             }
         }
@@ -263,7 +276,8 @@ class ConfirmTopSheetUseCaseSpec : BehaviorSpec({
         every { topsheets.billedAccountIds("2026-07") } returns emptySet()
         every { sequences.nextValue("p1") } returns 1
         every { sequences.prefixOf("p1") } returns "CONV-"
-        every { topsheets.confirm(any(), any(), any(), any()) } returns compiledTopsheet
+        every { batchSequences.nextValue("p1") } returns 1
+        every { topsheets.confirm(any(), any(), any(), any(), any(), any()) } returns compiledTopsheet
         val ctx = IdempotencyContext(key = "idem-confirm-1", requestHash = "hash-1", userId = "confirmer")
 
         When("confirming twice with the same key") {
@@ -275,7 +289,7 @@ class ConfirmTopSheetUseCaseSpec : BehaviorSpec({
                 first.status shouldBe TopSheetStatus.COMPILED
                 second.id shouldBe "ts1"
                 second.status shouldBe TopSheetStatus.COMPILED
-                verify(exactly = 1) { topsheets.confirm(any(), any(), any(), any()) }
+                verify(exactly = 1) { topsheets.confirm(any(), any(), any(), any(), any(), any()) }
                 verify(exactly = 1) { sequences.nextValue("p1") }
             }
         }

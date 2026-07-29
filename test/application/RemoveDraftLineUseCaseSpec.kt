@@ -41,7 +41,7 @@ class RemoveDraftLineUseCaseSpec : BehaviorSpec({
     val useCase = RemoveDraftLineUseCase(topsheets, activity, ImmediateTransactionRunner())
 
     Given("a DRAFT topsheet with two lines") {
-        every { topsheets.findById("ts1") } returns draftTopsheet()
+        every { topsheets.findByIdForUpdate("ts1") } returns draftTopsheet()
         every { topsheets.findLines("ts1") } returns listOf(line("l1", "a1"), line("l2", "a2"))
         every { topsheets.removeLine("l2") } returns true
 
@@ -56,7 +56,7 @@ class RemoveDraftLineUseCaseSpec : BehaviorSpec({
     }
 
     Given("a topsheet that is no longer DRAFT (already COMPILED)") {
-        every { topsheets.findById("ts1") } returns draftTopsheet(TopSheetStatus.COMPILED)
+        every { topsheets.findByIdForUpdate("ts1") } returns draftTopsheet(TopSheetStatus.COMPILED)
 
         When("removing a line") {
             Then("it is rejected with a Conflict") {
@@ -67,7 +67,7 @@ class RemoveDraftLineUseCaseSpec : BehaviorSpec({
     }
 
     Given("a lineId that does not belong to the topsheet") {
-        every { topsheets.findById("ts1") } returns draftTopsheet()
+        every { topsheets.findByIdForUpdate("ts1") } returns draftTopsheet()
         every { topsheets.findLines("ts1") } returns listOf(line("l1", "a1"), line("l2", "a2"))
 
         When("removing a foreign lineId") {
@@ -79,7 +79,7 @@ class RemoveDraftLineUseCaseSpec : BehaviorSpec({
     }
 
     Given("a DRAFT topsheet with only one remaining line") {
-        every { topsheets.findById("ts1") } returns draftTopsheet()
+        every { topsheets.findByIdForUpdate("ts1") } returns draftTopsheet()
         every { topsheets.findLines("ts1") } returns listOf(line("l1", "a1"))
 
         When("attempting to remove the last line") {
@@ -91,7 +91,7 @@ class RemoveDraftLineUseCaseSpec : BehaviorSpec({
     }
 
     Given("an unknown topsheet id") {
-        every { topsheets.findById("nope") } returns null
+        every { topsheets.findByIdForUpdate("nope") } returns null
 
         When("removing a line") {
             Then("it fails as NotFound") {

@@ -1,0 +1,12 @@
+-- Cancel / void a topsheet before RFP numbers are assigned.
+--
+-- A secretary may cancel a topsheet while it is still DRAFT or COMPILED (i.e. before
+-- generate-rfp moves it to RFP_ASSIGNED). The header is kept for audit with status
+-- 'cancelled'; the application deletes its topsheet_details lines so the affected
+-- accounts become immediately re-billable (the status-blind uq_account_per_period
+-- unique index would otherwise keep the account/period slot reserved).
+--
+-- Postgres forbids *using* a newly added enum value in the same transaction that added
+-- it (SQLSTATE 55P04; see V9/V11/V17), but here we only ADD the label — it is used at
+-- runtime, not in this migration — so a single migration is safe.
+ALTER TYPE topsheet_status ADD VALUE IF NOT EXISTS 'cancelled' AFTER 'paid';
