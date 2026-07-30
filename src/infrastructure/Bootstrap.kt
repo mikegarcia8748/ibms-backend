@@ -6,6 +6,8 @@ import com.puregoldbe.ibms.adapter.db.connectExposed
 import com.puregoldbe.ibms.adapter.db.migrate
 import com.puregoldbe.ibms.adapter.gateway.ExposedTransactionRunner
 import com.puregoldbe.ibms.adapter.gateway.LocalDiskStorage
+import com.puregoldbe.ibms.adapter.gateway.SimulatedEmailGateway
+import com.puregoldbe.ibms.adapter.gateway.SmtpEmailGateway
 import com.puregoldbe.ibms.adapter.gateway.SimulatedOcrExtractor
 import com.puregoldbe.ibms.adapter.gateway.SimulatedRfpGateway
 import com.puregoldbe.ibms.adapter.gateway.SystemClock
@@ -17,6 +19,7 @@ import com.puregoldbe.ibms.adapter.security.LocalHmacPresign
 import com.puregoldbe.ibms.adapter.security.SecureRandomSecrets
 import com.puregoldbe.ibms.adapter.security.configureAuthentication
 import com.puregoldbe.ibms.application.usecase.*
+import com.puregoldbe.ibms.domain.port.EmailPort
 import com.puregoldbe.ibms.infrastructure.config.AppConfig
 import io.ktor.http.*
 import io.ktor.server.application.*
@@ -69,6 +72,11 @@ fun Application.moduleWith(cfg: AppConfig) {
     val ocrGateway = SimulatedOcrExtractor()
     // External RFP system. Simulated until cfg.rfpApiBaseUrl is set + an HTTP adapter lands.
     val rfpGateway = SimulatedRfpGateway()
+    // Outbound email. Real delivery through the org SMTP relay when one is configured;
+    // otherwise a logging stub so local dev + tests run the whole enqueue->dispatch
+    // pipeline end-to-end.
+    val emailGateway: EmailPort =
+        if (cfg.smtp != null) SmtpEmailGateway(cfg.smtp) else SimulatedEmailGateway()
 
     val users = ExposedUserRepository()
     val sessions = ExposedSessionRepository()
@@ -85,11 +93,16 @@ fun Application.moduleWith(cfg: AppConfig) {
     val ocrTemplates = ExposedOcrTemplateRepository()
     val ocrBatches = ExposedOcrBatchRepository()
     val changeRequests = ExposedAccountChangeRequestRepository()
+    val emailLog = ExposedEmailLogRepository()
+    val notificationSubs = ExposedNotificationSubscriptionRepository()
 
     // --- Use cases ---
     // Every path that ends in "signed in" mints its tokens through one issuer, so
     // login, first-login password change and refresh cannot drift apart.
     val sessionIssuer = SessionIssuer(sessions, secrets, jwtService, sessionPolicy)
+    // Event-driven email: use cases enqueue into email_log inside their transaction;
+    // the background dispatcher below drains it through emailGateway.
+    val notifications = NotificationService(notificationSubs, emailLog, cfg.appUrl, cfg.smtp?.fromEmail)
     val login = LoginUseCase(users, passwordHasher, jwtService, sessionIssuer, sessionPolicy, clock, tx)
     val completeFirstLogin = CompleteFirstLoginUseCase(users, sessions, passwordHasher, sessionIssuer, clock, tx)
     val changeOwnPassword = ChangeOwnPasswordUseCase(users, sessions, passwordHasher, sessionIssuer, clock, tx)
@@ -109,18 +122,18 @@ fun Application.moduleWith(cfg: AppConfig) {
     val deactivateProvider = DeactivateProviderUseCase(providers, clock, tx)
     val listStores = ListStoresUseCase(stores, tx)
     val getStore = GetStoreUseCase(stores, tx)
-    val createStore = CreateStoreUseCase(stores, attachments, activities, tx)
+    val createStore = CreateStoreUseCase(stores, attachments, activities, notifications, tx)
     val updateStore = UpdateStoreUseCase(stores, attachments, tx)
     val closeStore = CloseStoreUseCase(stores, attachments, accounts, clock, tx)
     val getFloating = GetFloatingAccountsUseCase(accounts, tx)
     val listAccounts = ListAccountsUseCase(accounts, tx)
     val getAccount = GetAccountUseCase(accounts, tx)
-    val createAccount = CreateAccountUseCase(accounts, providers, stores, activities, attachments, tx)
+    val createAccount = CreateAccountUseCase(accounts, providers, stores, activities, attachments, notifications, tx)
     val createISPAccount = CreateISPAccountUseCase(createAccount, providers, attachments, clock, tx)
-    val updateAccount = UpdateAccountUseCase(accounts, providers, stores, tx)
-    val transferAccount = TransferAccountUseCase(accounts, stores, transfers, attachments, idempotency, activities, clock, tx)
+    val updateAccount = UpdateAccountUseCase(accounts, providers, stores, notifications, tx)
+    val transferAccount = TransferAccountUseCase(accounts, stores, transfers, attachments, idempotency, activities, notifications, clock, tx)
     val listTransfers = ListTransfersUseCase(transfers, tx)
-    val deactivateAccount = DeactivateAccountUseCase(accounts, attachments, idempotency, activities, clock, tx)
+    val deactivateAccount = DeactivateAccountUseCase(accounts, attachments, idempotency, activities, notifications, clock, tx)
     val cancelDeactivation = CancelDeactivationUseCase(accounts, activities, tx)
     val bulkImport = BulkImportAccountsUseCase(providers, sequences, batchSequences, stores, accounts, attachments, activities, tx)
     val presignUpload = PresignUploadUseCase(attachments, presign, tx)
@@ -135,15 +148,15 @@ fun Application.moduleWith(cfg: AppConfig) {
     val createDraftTopSheet = CreateDraftTopSheetUseCase(accounts, stores, providers, topsheets, idempotency, activities, clock, tx)
     val updateDraftLine = UpdateDraftLineUseCase(topsheets, tx)
     val generateRfp = GenerateRfpUseCase(topsheets, rfpGateway, idempotency, activities, tx)
-    val releaseToFinance = ReleaseToFinanceUseCase(topsheets, rfpGateway, activities, clock, tx)
+    val releaseToFinance = ReleaseToFinanceUseCase(topsheets, rfpGateway, activities, notifications, clock, tx)
     val removeDraftLine = RemoveDraftLineUseCase(topsheets, activities, tx)
-    val confirmTopSheet = ConfirmTopSheetUseCase(accounts, stores, topsheets, sequences, batchSequences, idempotency, activities, clock, tx)
+    val confirmTopSheet = ConfirmTopSheetUseCase(accounts, stores, topsheets, sequences, batchSequences, idempotency, activities, notifications, clock, tx)
     val cancelTopSheet = CancelTopSheetUseCase(topsheets, activities, tx)
     val exportTopSheet = ExportTopSheetExcelUseCase(topsheets, tx)
     val exportAccounts = ExportAccountsExcelUseCase(accounts, providers, tx)
     val exportChequePdf = GenerateChequePaymentPdfUseCase(topsheets, tx)
     val exportChequeCsv = ExportChequePaymentCsvUseCase(topsheets, tx)
-    val expireGrace = ExpireGracePeriodAccountsUseCase(accounts, clock, tx)
+    val expireGrace = ExpireGracePeriodAccountsUseCase(accounts, notifications, clock, tx)
     val listActivities = ListActivitiesUseCase(activities, tx)
     val triggerOcr = TriggerOcrExtractionUseCase(ocrBatches, ocrGateway, tx)
     val listOcrBatches = ListOcrBatchesUseCase(ocrBatches, tx)
@@ -152,7 +165,7 @@ fun Application.moduleWith(cfg: AppConfig) {
     val createOcrTemplate = CreateOcrTemplateUseCase(ocrTemplates, tx)
     val updateOcrTemplate = UpdateOcrTemplateUseCase(ocrTemplates, tx)
     val submitChangeRequest = SubmitAccountChangeRequestUseCase(changeRequests, accounts, providers, attachments, activities, clock, tx)
-    val approveChangeRequest = ApproveAccountChangeRequestUseCase(changeRequests, accounts, providers, activities, clock, tx)
+    val approveChangeRequest = ApproveAccountChangeRequestUseCase(changeRequests, accounts, providers, activities, notifications, clock, tx)
     val rejectChangeRequest = RejectAccountChangeRequestUseCase(changeRequests, activities, clock, tx)
     val cancelChangeRequest = CancelAccountChangeRequestUseCase(changeRequests, activities, clock, tx)
     val getChangeRequestWithDiff = GetAccountChangeRequestWithDiffUseCase(changeRequests, accounts, tx)
@@ -160,6 +173,9 @@ fun Application.moduleWith(cfg: AppConfig) {
     val dashboardSummary = GetDashboardSummaryUseCase(accounts, tx)
     val listDashboardAccounts = ListDashboardAccountsUseCase(accounts, tx)
     val listBillingHistory = ListBillingHistoryUseCase(topsheets, tx)
+    val getUserNotificationSubscriptions = GetUserNotificationSubscriptionsUseCase(users, notificationSubs, tx)
+    val updateUserNotificationSubscriptions = UpdateUserNotificationSubscriptionsUseCase(users, notificationSubs, tx)
+    val dispatchEmails = DispatchQueuedEmailsUseCase(emailLog, emailGateway, clock, tx)
 
     // --- Cross-cutting plugins ---
     configureStatusPages()
@@ -190,7 +206,10 @@ fun Application.moduleWith(cfg: AppConfig) {
         attachmentBlobRoutes(storeBlob, readBlob)
         authenticate(AUTH_SESSION) {
             securedAuthRoutes(getCurrentUser, changeOwnPassword, logout, logoutEverywhere)
-            userRoutes(getCurrentUser, listUsers, provisionUser, resetUserPassword, updateUserRole, updateUserStatus)
+            userRoutes(
+                getCurrentUser, listUsers, provisionUser, resetUserPassword, updateUserRole, updateUserStatus,
+                getUserNotificationSubscriptions, updateUserNotificationSubscriptions,
+            )
             providerRoutes(listProviders, createProvider, updateProvider, deactivateProvider)
             storeRoutes(listStores, getStore, createStore, updateStore, closeStore, getFloating)
             accountRoutes(listAccounts, getAccount, createAccount, updateAccount, transferAccount, deactivateAccount, cancelDeactivation, bulkImport, createISPAccount)
@@ -218,6 +237,28 @@ fun Application.moduleWith(cfg: AppConfig) {
                 if (n > 0) log.info("[grace-expiry] moved $n account(s) past their 30-day grace to inactive")
             }.onFailure { log.error("[grace-expiry] job failed", it) }
             delay(24.hours)
+        }
+    }
+
+    // --- Background job: drain the email_log outbox and deliver notifications ---
+    launch {
+        while (isActive) {
+            runCatching {
+                val n = dispatchEmails()
+                if (n > 0) log.info("[email-dispatch] processed $n queued email(s)")
+            }.onFailure { log.error("[email-dispatch] job failed", it) }
+            delay(1.minutes)
+        }
+    }
+
+    // --- Background job: drain the email_log outbox and deliver notifications ---
+    launch {
+        while (isActive) {
+            runCatching {
+                val n = dispatchEmails()
+                if (n > 0) log.info("[email-dispatch] processed $n queued email(s)")
+            }.onFailure { log.error("[email-dispatch] job failed", it) }
+            delay(1.minutes)
         }
     }
 }

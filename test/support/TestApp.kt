@@ -32,8 +32,8 @@ fun testAppConfig(): AppConfig = AppConfig(
     storageLocalDir = System.getProperty("java.io.tmpdir").trimEnd('/') + "/ibms-test-storage",
     corsAllowedHosts = emptyList(),
     geminiApiKey = null,
-    mailerSendApiKey = null,
-    mailerSendFromEmail = null,
+    // No relay configured → the suite runs through SimulatedEmailGateway.
+    smtp = null,
     appUrl = "http://localhost:8080",
     rfpApiBaseUrl = null,
     rfpApiKey = null,

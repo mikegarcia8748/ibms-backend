@@ -4,6 +4,7 @@ import com.puregoldbe.ibms.application.usecase.ExpireGracePeriodAccountsUseCase
 import com.puregoldbe.ibms.domain.model.Account
 import com.puregoldbe.ibms.domain.model.AccountStatus
 import com.puregoldbe.ibms.domain.port.AccountRepository
+import com.puregoldbe.ibms.domain.port.NotificationEnqueuer
 import com.puregoldbe.ibms.support.FakeClock
 import com.puregoldbe.ibms.support.ImmediateTransactionRunner
 import io.kotest.core.spec.IsolationMode
@@ -27,8 +28,9 @@ class ExpireGracePeriodAccountsUseCaseSpec : BehaviorSpec({
     isolationMode = IsolationMode.InstancePerLeaf
 
     val accounts = mockk<AccountRepository>(relaxed = true)
+    val notifications = mockk<NotificationEnqueuer>(relaxed = true)
     val clock = FakeClock(Instant.parse("2026-08-01T00:00:00Z"))
-    val useCase = ExpireGracePeriodAccountsUseCase(accounts, clock, ImmediateTransactionRunner())
+    val useCase = ExpireGracePeriodAccountsUseCase(accounts, notifications, clock, ImmediateTransactionRunner())
 
     Given("one account past grace and one still within it") {
         // requested 2026-06-25 -> grace ends 2026-07-25 (< now 2026-08-01): expired

@@ -7,6 +7,7 @@ import com.puregoldbe.ibms.domain.model.TopSheetDetail
 import com.puregoldbe.ibms.domain.model.TopSheetLineStatus
 import com.puregoldbe.ibms.domain.model.TopSheetStatus
 import com.puregoldbe.ibms.domain.port.ActivityRecorder
+import com.puregoldbe.ibms.domain.port.NotificationEnqueuer
 import com.puregoldbe.ibms.domain.port.RfpGateway
 import com.puregoldbe.ibms.domain.port.RfpReleaseResult
 import com.puregoldbe.ibms.domain.port.TopSheetRepository
@@ -41,8 +42,9 @@ class ReleaseToFinanceUseCaseSpec : BehaviorSpec({
     val topsheets = mockk<TopSheetRepository>(relaxed = true)
     val rfp = mockk<RfpGateway>()
     val activity = mockk<ActivityRecorder>(relaxed = true)
+    val notifications = mockk<NotificationEnqueuer>(relaxed = true)
     val clock = FakeClock()
-    val useCase = ReleaseToFinanceUseCase(topsheets, rfp, activity, clock, ImmediateTransactionRunner())
+    val useCase = ReleaseToFinanceUseCase(topsheets, rfp, activity, notifications, clock, ImmediateTransactionRunner())
 
     Given("an RFP_ASSIGNED topsheet") {
         every { topsheets.findById("ts1") } returns releaseTopsheet(TopSheetStatus.RFP_ASSIGNED)

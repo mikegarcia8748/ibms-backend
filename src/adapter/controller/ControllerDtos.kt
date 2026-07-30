@@ -13,6 +13,20 @@ data class UpdateProviderRequest(val name: String? = null, val paymentScheduleDa
 @Serializable
 data class RejectChangeRequestBody(val reason: String)
 
+/** Sysad replaces a user's notification subscriptions wholesale (list of event keys). */
+@Serializable
+data class UpdateNotificationSubscriptionsRequest(val events: List<String>)
+
+/** A user's current subscriptions plus the full catalogue of selectable events (key + label). */
+@Serializable
+data class NotificationSubscriptionsResponse(
+    val subscribed: List<String>,
+    val available: List<NotificationEventInfo>,
+)
+
+@Serializable
+data class NotificationEventInfo(val key: String, val label: String)
+
 /**
  * Summary of a bulk-import run: counts of entities created vs reused, plus reasons.
  *

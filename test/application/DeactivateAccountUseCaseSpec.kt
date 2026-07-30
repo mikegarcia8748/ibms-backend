@@ -8,6 +8,7 @@ import com.puregoldbe.ibms.domain.port.AccountRepository
 import com.puregoldbe.ibms.domain.port.ActivityRecorder
 import com.puregoldbe.ibms.domain.port.AttachmentRepository
 import com.puregoldbe.ibms.domain.port.IdempotencyContext
+import com.puregoldbe.ibms.domain.port.NotificationEnqueuer
 import com.puregoldbe.ibms.support.FakeClock
 import com.puregoldbe.ibms.support.FakeIdempotencyKeyRepository
 import com.puregoldbe.ibms.support.ImmediateTransactionRunner
@@ -60,8 +61,9 @@ class DeactivateAccountUseCaseSpec : BehaviorSpec({
     val attachments = mockk<AttachmentRepository>(relaxed = true)
     val idempotency = FakeIdempotencyKeyRepository()
     val activity = mockk<ActivityRecorder>(relaxed = true)
+    val notifications = mockk<NotificationEnqueuer>(relaxed = true)
     val clock = FakeClock(Instant.parse("2026-08-01T00:00:00Z"))
-    val useCase = DeactivateAccountUseCase(accounts, attachments, idempotency, activity, clock, ImmediateTransactionRunner())
+    val useCase = DeactivateAccountUseCase(accounts, attachments, idempotency, activity, notifications, clock, ImmediateTransactionRunner())
 
     Given("an active account") {
         val account = activeAccount()
