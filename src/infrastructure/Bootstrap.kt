@@ -250,4 +250,15 @@ fun Application.moduleWith(cfg: AppConfig) {
             delay(1.minutes)
         }
     }
+
+    // --- Background job: drain the email_log outbox and deliver notifications ---
+    launch {
+        while (isActive) {
+            runCatching {
+                val n = dispatchEmails()
+                if (n > 0) log.info("[email-dispatch] processed $n queued email(s)")
+            }.onFailure { log.error("[email-dispatch] job failed", it) }
+            delay(1.minutes)
+        }
+    }
 }
