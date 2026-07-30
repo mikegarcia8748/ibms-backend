@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # ---- Build stage: package the executable fat jar via the Gradle wrapper ----
-FROM eclipse-temurin:21-jdk AS build
+FROM eclipse-temurin:25-jdk AS build
 WORKDIR /app
 # Warm the Gradle dependency cache on its own layer so source edits don't re-download.
 COPY gradlew ./
@@ -13,7 +13,8 @@ COPY resources resources
 RUN ./gradlew buildFatJar --no-daemon
 
 # ---- Run stage: slim JRE with just the jar ----
-FROM eclipse-temurin:21-jre
+# Must match build.gradle.kts's jvmToolchain — the jar's class files are Java 25.
+FROM eclipse-temurin:25-jre
 WORKDIR /app
 COPY --from=build /app/build/libs/ibms-backend-all.jar app.jar
 EXPOSE 8080
