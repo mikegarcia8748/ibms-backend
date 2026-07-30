@@ -49,7 +49,7 @@ Only `443` is exposed to the network. `8080` and `5432` stay bound to localhost.
 | Item | Where | Notes |
 |---|---|---|
 | **PostgreSQL 16, Windows x64** | postgresql.org → EDB installer | Officially supports Windows Server 2019. Bundles `pgcrypto` + `citext` contrib and `psql`. |
-| **Eclipse Temurin JRE 21 (MSI)** | adoptium.net | Matches the [Dockerfile](../Dockerfile) runtime (Java 21). Needed **on the server** to run the jar. |
+| **Eclipse Temurin JRE 25 (MSI)** | adoptium.net | Matches the [Dockerfile](../Dockerfile) runtime and `jvmToolchain(25)` in the build. The jar's class files are Java 25, so an older JRE fails with `UnsupportedClassVersionError`. Needed **on the server** to run the jar. |
 | **The fat jar** `ibms-backend-all.jar` | build it (see §5) | Build on a **dev/CI machine** and copy it over — the Gradle build needs internet to provision its JDK-25 toolchain, which an app server usually shouldn't have. |
 | **WinSW** (`WinSW.NET4.exe`) | github.com/winsw/winsw | Runs the jar as an auto-restarting Windows Service. WS2019 already has the required .NET Framework. |
 | **Caddy for Windows** | caddyserver.com | Reverse proxy + automatic HTTPS. Gives you **TLS 1.3**, which WS2019's built-in Schannel/IIS cannot. |
@@ -100,10 +100,10 @@ C:\ibms\
    service\               (WinSW lives here — see §7)
 ```
 
-Install the **Temurin JRE 21** MSI, then verify in a new terminal:
+Install the **Temurin JRE 25** MSI, then verify in a new terminal:
 
 ```powershell
-java -version    # must report 21.x
+java -version    # must report 25.x
 ```
 
 ---
@@ -290,7 +290,7 @@ Keep ~14–30 days and test a restore periodically. **The dumps and attachment c
 
 - [ ] PostgreSQL 16 installed; service running; `max server memory` capped on SQL Server 2016 if it's busy
 - [ ] `ibms` database + role created; `pgcrypto` + `citext` extensions pre-created; schema privileges granted
-- [ ] Temurin **JRE 21** installed (`java -version` → 21)
+- [ ] Temurin **JRE 25** installed (`java -version` → 25)
 - [ ] Fat jar built off-server and copied to `C:\ibms\app`
 - [ ] `JWT_SECRET` and `BOOTSTRAP_ADMIN_PASSWORD` overridden with strong values; `CORS_ALLOWED_HOSTS` set
 - [ ] WinSW service installed, `Automatic`, started
