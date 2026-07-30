@@ -8,12 +8,15 @@ import com.puregoldbe.ibms.domain.model.AccountStatus
 import com.puregoldbe.ibms.domain.model.AccountUpsertRequest
 import com.puregoldbe.ibms.domain.model.CursorPage
 import com.puregoldbe.ibms.domain.model.FieldDiff
+import com.puregoldbe.ibms.domain.model.NotificationContext
+import com.puregoldbe.ibms.domain.model.NotificationEvent
 import com.puregoldbe.ibms.domain.model.SubmitAccountChangeRequestInput
 import com.puregoldbe.ibms.domain.port.AccountChangeRequestRepository
 import com.puregoldbe.ibms.domain.port.AccountRepository
 import com.puregoldbe.ibms.domain.port.ActivityRecorder
 import com.puregoldbe.ibms.domain.port.AttachmentRepository
 import com.puregoldbe.ibms.domain.port.Clock
+import com.puregoldbe.ibms.domain.port.NotificationEnqueuer
 import com.puregoldbe.ibms.domain.port.ProviderRepository
 import com.puregoldbe.ibms.domain.model.ProviderStatus
 import com.puregoldbe.ibms.domain.port.TransactionRunner
@@ -98,6 +101,7 @@ class ApproveAccountChangeRequestUseCase(
     private val accounts: AccountRepository,
     private val providers: ProviderRepository,
     private val activity: ActivityRecorder,
+    private val notifications: NotificationEnqueuer,
     private val clock: Clock,
     private val tx: TransactionRunner,
 ) {
@@ -164,6 +168,15 @@ class ApproveAccountChangeRequestUseCase(
         val approved = requests.approve(requestId, approverId, clock.now())
             ?: throw DomainError.NotFound("change request $requestId not found")
         activity.record(approverId, "account_change_request.approved", "account_change_request", requestId)
+        notifications.enqueue(
+            NotificationEvent.ACCOUNT_UPDATED,
+            NotificationContext(
+                headline = "Account details updated: ${account.accountNumber} (change request approved)",
+                details = listOf("Account number" to account.accountNumber),
+                entityId = request.accountId,
+                linkPath = "/accounts/${request.accountId}",
+            ),
+        )
         approved
     }
 }

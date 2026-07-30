@@ -57,6 +57,8 @@ dependencies {
     implementation(libs.poi.ooxml)
     // --- PDF export (cheque payment voucher) ---
     implementation(libs.openpdf)
+    // --- Outbound email (SMTP relay) ---
+    implementation(libs.angus.mail)
     // --- Logging / metrics ---
     implementation(libs.logback.classic)
     implementation(libs.micrometer.registryPrometheus)

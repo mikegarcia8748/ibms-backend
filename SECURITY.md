@@ -23,6 +23,7 @@ business rule and authorization check runs in the API, not the client.
 
 ## Known gaps / follow-ups (Phase 7 hardening)
 - **Attachment access scoping.** `GET /attachments/{id}` currently allows any authenticated user to download any attachment by id (UUIDs are unguessable, all users are internal staff). Scope downloads to the owning entity's access when the presigned GCS/S3 flow lands.
-- **Activity audit log & email outbox** are deferred with Phase 3 (OCR/email). Mutations are not yet written to `activities`.
+- **Email outbox double-send window.** The dispatcher marks a row's terminal status *after* the SMTP handoff, so a crash in between leaves it `queued` and it can be sent twice on the next pass. A `sending` claim state or `FOR UPDATE SKIP LOCKED` would close it.
+- **`SMTP_PASSWORD`** is a secret on the same footing as `DB_PASSWORD` — set it through the service's env config (WinSW `<env>` / compose), never in a committed file. Keep `SMTP_STARTTLS=true` unless the relay is reachable only over a trusted internal network.
 - **OCR prompt-injection** guard is N/A until the Gemini OCR ingestion (Phase 3) is built; when it is, keep extraction read-only and whitelist parsed account numbers before any write.
 - **Rate limiting** and request-size limits are not yet configured.

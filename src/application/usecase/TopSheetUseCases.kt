@@ -6,6 +6,8 @@ import com.puregoldbe.ibms.domain.model.CompilableLine
 import com.puregoldbe.ibms.domain.model.CompilablePreview
 import com.puregoldbe.ibms.domain.model.CursorPage
 import com.puregoldbe.ibms.domain.model.NotYetSubscribedLine
+import com.puregoldbe.ibms.domain.model.NotificationContext
+import com.puregoldbe.ibms.domain.model.NotificationEvent
 import com.puregoldbe.ibms.domain.model.Store
 import com.puregoldbe.ibms.domain.model.TopSheet
 import com.puregoldbe.ibms.domain.model.TopSheetDetail
@@ -14,6 +16,7 @@ import com.puregoldbe.ibms.domain.port.AccountRepository
 import com.puregoldbe.ibms.domain.port.BatchSequenceRepository
 import com.puregoldbe.ibms.domain.port.ActivityRecorder
 import com.puregoldbe.ibms.domain.port.Clock
+import com.puregoldbe.ibms.domain.port.NotificationEnqueuer
 import com.puregoldbe.ibms.domain.port.IdempotencyContext
 import com.puregoldbe.ibms.domain.port.IdempotencyKeyRepository
 import com.puregoldbe.ibms.domain.port.InvoiceSequenceRepository
@@ -438,6 +441,7 @@ class ReleaseToFinanceUseCase(
     private val topsheets: TopSheetRepository,
     private val rfp: RfpGateway,
     private val activity: ActivityRecorder,
+    private val notifications: NotificationEnqueuer,
     private val clock: Clock,
     private val tx: TransactionRunner,
 ) {
@@ -463,6 +467,20 @@ class ReleaseToFinanceUseCase(
         val released = topsheets.releaseToFinance(topsheetId, callerId, clock.now())
             ?: throw DomainError.Conflict("topsheet $topsheetId is not in rfp_assigned status")
         activity.record(callerId, "topsheet.released_to_finance", "topsheet", topsheetId)
+        notifications.enqueue(
+            NotificationEvent.TOPSHEET_RELEASED,
+            NotificationContext(
+                headline = "Topsheet released to finance: invoice ${released.invoiceNumber ?: released.id}",
+                details = listOfNotNull(
+                    released.invoiceNumber?.let { "Invoice" to it },
+                    released.providerName?.let { "Provider" to it },
+                    "Billing period" to released.billingPeriod,
+                    "Total" to released.totalAmount,
+                ),
+                entityId = topsheetId,
+                linkPath = "/topsheets/$topsheetId",
+            ),
+        )
         released
     }
 }
@@ -513,6 +531,7 @@ class ConfirmTopSheetUseCase(
     private val batchSequences: BatchSequenceRepository,
     private val idempotency: IdempotencyKeyRepository,
     private val activity: ActivityRecorder,
+    private val notifications: NotificationEnqueuer,
     private val clock: Clock,
     private val tx: TransactionRunner,
 ) {
@@ -592,6 +611,21 @@ class ConfirmTopSheetUseCase(
             val confirmed = topsheets.confirm(topsheetId, invoiceNumber, batchNumber, accountCount, totalAmount, clock.now())
                 ?: throw DomainError.Conflict("topsheet $topsheetId is no longer in draft status")
             activity.record(confirmerId, "topsheet.compiled", "topsheet", topsheetId)
+            notifications.enqueue(
+                NotificationEvent.TOPSHEET_COMPILED,
+                NotificationContext(
+                    headline = "Topsheet compiled: invoice ${confirmed.invoiceNumber ?: confirmed.id}",
+                    details = listOfNotNull(
+                        confirmed.invoiceNumber?.let { "Invoice" to it },
+                        confirmed.providerName?.let { "Provider" to it },
+                        "Billing period" to confirmed.billingPeriod,
+                        "Accounts" to confirmed.accountCount.toString(),
+                        "Total" to confirmed.totalAmount,
+                    ),
+                    entityId = topsheetId,
+                    linkPath = "/topsheets/$topsheetId",
+                ),
+            )
             confirmed
         }
     }

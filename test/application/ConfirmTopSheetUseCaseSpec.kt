@@ -14,6 +14,7 @@ import com.puregoldbe.ibms.domain.port.BatchSequenceRepository
 import com.puregoldbe.ibms.domain.port.IdempotencyContext
 import com.puregoldbe.ibms.domain.port.IdempotencyKeyRepository
 import com.puregoldbe.ibms.domain.port.InvoiceSequenceRepository
+import com.puregoldbe.ibms.domain.port.NotificationEnqueuer
 import com.puregoldbe.ibms.domain.port.StoreRepository
 import com.puregoldbe.ibms.domain.port.TopSheetRepository
 import com.puregoldbe.ibms.support.FakeClock
@@ -82,8 +83,9 @@ class ConfirmTopSheetUseCaseSpec : BehaviorSpec({
     val batchSequences = mockk<BatchSequenceRepository>()
     val idempotency: IdempotencyKeyRepository = FakeIdempotencyKeyRepository()
     val activity = mockk<ActivityRecorder>(relaxed = true)
+    val notifications = mockk<NotificationEnqueuer>(relaxed = true)
     val useCase = ConfirmTopSheetUseCase(
-        accounts, stores, topsheets, sequences, batchSequences, idempotency, activity, clock,
+        accounts, stores, topsheets, sequences, batchSequences, idempotency, activity, notifications, clock,
         ImmediateTransactionRunner(),
     )
 

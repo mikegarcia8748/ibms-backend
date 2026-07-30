@@ -5,9 +5,12 @@ import com.puregoldbe.ibms.domain.model.Account
 import com.puregoldbe.ibms.domain.model.AccountStatus
 import com.puregoldbe.ibms.domain.model.AccountUpsertRequest
 import com.puregoldbe.ibms.domain.model.CursorPage
+import com.puregoldbe.ibms.domain.model.NotificationContext
+import com.puregoldbe.ibms.domain.model.NotificationEvent
 import com.puregoldbe.ibms.domain.port.AccountRepository
 import com.puregoldbe.ibms.domain.port.ActivityRecorder
 import com.puregoldbe.ibms.domain.port.AttachmentRepository
+import com.puregoldbe.ibms.domain.port.NotificationEnqueuer
 import com.puregoldbe.ibms.domain.port.ProviderRepository
 import com.puregoldbe.ibms.domain.port.StoreRepository
 import com.puregoldbe.ibms.domain.port.TransactionRunner
@@ -47,6 +50,7 @@ class CreateAccountUseCase(
     private val stores: StoreRepository,
     private val activity: ActivityRecorder,
     private val attachments: AttachmentRepository,
+    private val notifications: NotificationEnqueuer,
     private val tx: TransactionRunner,
 ) {
     suspend operator fun invoke(input: AccountUpsertRequest, actorId: String?): Account = tx.inTransaction {
@@ -65,6 +69,19 @@ class CreateAccountUseCase(
         }
         val account = accounts.create(input, actorId)
         activity.record(actorId, "account.created", "account", account.id)
+        notifications.enqueue(
+            NotificationEvent.ACCOUNT_CREATED,
+            NotificationContext(
+                headline = "New account added: ${account.accountNumber}",
+                details = listOfNotNull(
+                    "Account number" to account.accountNumber,
+                    account.circuitId?.let { "Circuit" to it },
+                    "MRC" to account.rate,
+                ),
+                entityId = account.id,
+                linkPath = "/accounts/${account.id}",
+            ),
+        )
         account
     }
 }
@@ -73,6 +90,7 @@ class UpdateAccountUseCase(
     private val accounts: AccountRepository,
     private val providers: ProviderRepository,
     private val stores: StoreRepository,
+    private val notifications: NotificationEnqueuer,
     private val tx: TransactionRunner,
 ) {
     suspend operator fun invoke(id: String, input: AccountUpsertRequest): Account = tx.inTransaction {
@@ -80,6 +98,16 @@ class UpdateAccountUseCase(
         if (!Money.isPositive(input.rate)) throw DomainError.Validation("rate (MRC) must be greater than 0")
         providers.findById(input.providerId) ?: throw DomainError.Validation("unknown providerId ${input.providerId}")
         stores.findById(input.storeId) ?: throw DomainError.Validation("unknown storeId ${input.storeId}")
-        accounts.update(id, input) ?: throw DomainError.NotFound("account $id not found")
+        val updated = accounts.update(id, input) ?: throw DomainError.NotFound("account $id not found")
+        notifications.enqueue(
+            NotificationEvent.ACCOUNT_UPDATED,
+            NotificationContext(
+                headline = "Account details updated: ${updated.accountNumber}",
+                details = listOf("Account number" to updated.accountNumber),
+                entityId = updated.id,
+                linkPath = "/accounts/${updated.id}",
+            ),
+        )
+        updated
     }
 }

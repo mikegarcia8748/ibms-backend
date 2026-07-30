@@ -48,6 +48,30 @@ data class AuthConfig(
     )
 }
 
+/**
+ * The org's internal SMTP relay, used for every outbound notification. Absent
+ * (`AppConfig.smtp == null`) when `SMTP_HOST` is unset, which drops delivery to the
+ * logging [com.puregoldbe.ibms.adapter.gateway.SimulatedEmailGateway] — the same
+ * "degrade to simulated" contract as [geminiApiKey] and [rfpApiBaseUrl].
+ *
+ * [username] null means the relay takes no AUTH, which is normal for a relay that
+ * only listens on the internal network. [fromEmail] is required whenever a host is
+ * set: relays routinely refuse a From they don't recognise, so it must be the
+ * generic address the relay is willing to send as.
+ */
+data class SmtpConfig(
+    val host: String,
+    val port: Int,
+    val username: String?,
+    val password: String?,
+    /** Upgrade a plaintext connection via STARTTLS (the port-587 submission flow). */
+    val startTls: Boolean,
+    /** TLS from the first byte instead (the port-465 flow). Mutually exclusive with [startTls]. */
+    val sslOnConnect: Boolean,
+    val fromEmail: String,
+    val fromName: String?,
+)
+
 data class AppConfig(
     val db: DbConfig,
     val jwt: JwtConfig,
@@ -55,8 +79,8 @@ data class AppConfig(
     val storageLocalDir: String,
     val corsAllowedHosts: List<String>,
     val geminiApiKey: String?,
-    val mailerSendApiKey: String?,
-    val mailerSendFromEmail: String?,
+    /** Null → notifications are logged, not sent. See [SmtpConfig]. */
+    val smtp: SmtpConfig?,
     val appUrl: String,
     /** External RFP-generating system. Null → the simulated gateway is used. */
     val rfpApiBaseUrl: String?,
@@ -65,6 +89,31 @@ data class AppConfig(
     companion object {
         private fun env(name: String, default: String? = null): String? =
             System.getenv(name)?.takeIf { it.isNotBlank() } ?: default
+
+        /**
+         * Null unless SMTP_HOST is set. The from-address falls back to SMTP_USERNAME
+         * (relays are usually happy to send as the mailbox that authenticated) and is
+         * a hard startup failure otherwise — a queued row that could only ever fail to
+         * send is worse than a boot that refuses.
+         */
+        private fun smtpFromEnv(): SmtpConfig? {
+            val host = env("SMTP_HOST") ?: return null
+            val username = env("SMTP_USERNAME")
+            val fromEmail = env("MAIL_FROM_EMAIL") ?: username
+                ?: error("SMTP_HOST is set but neither MAIL_FROM_EMAIL nor SMTP_USERNAME is — no from address to send as")
+            return SmtpConfig(
+                host = host,
+                port = env("SMTP_PORT", "587")!!.toInt(),
+                username = username,
+                password = env("SMTP_PASSWORD"),
+                // Strict (but case-insensitive): a typo must not silently read as false
+                // and quietly downgrade the connection to plaintext.
+                startTls = env("SMTP_STARTTLS", "true")!!.lowercase().toBooleanStrict(),
+                sslOnConnect = env("SMTP_SSL", "false")!!.lowercase().toBooleanStrict(),
+                fromEmail = fromEmail,
+                fromName = env("MAIL_FROM_NAME", "IBMS Notifications"),
+            )
+        }
 
         fun fromEnv(): AppConfig = AppConfig(
             db = DbConfig(
@@ -93,8 +142,7 @@ data class AppConfig(
             corsAllowedHosts = env("CORS_ALLOWED_HOSTS", "")!!
                 .split(",").map { it.trim() }.filter { it.isNotEmpty() },
             geminiApiKey = env("GEMINI_API_KEY"),
-            mailerSendApiKey = env("MAILERSEND_API_KEY"),
-            mailerSendFromEmail = env("MAILERSEND_FROM_EMAIL"),
+            smtp = smtpFromEnv(),
             appUrl = env("APP_URL", "http://localhost:8080")!!,
             rfpApiBaseUrl = env("RFP_API_BASE_URL"),
             rfpApiKey = env("RFP_API_KEY"),
