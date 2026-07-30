@@ -78,6 +78,12 @@ tasks.test {
             .mapKeys { it.key.toString() }
             .filterKeys { it.startsWith("kotest.") }
     )
+
+    // ConfigKeysSpec and MigrationVersionsSpec read these from the project directory
+    // rather than the classpath, so declare them or the task stays up-to-date after an
+    // edit that should have failed the build.
+    inputs.file(".env.example").withPropertyName("envExample")
+    inputs.dir("resources/db/migration").withPropertyName("migrations")
 }
 
 ktor {
@@ -106,21 +112,30 @@ tasks.named<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJ
 // still running `./gradlew run` without manual `export` calls.
 // IDE "Run Configurations" that delegate to Gradle inherit these automatically.
 // ---------------------------------------------------------------------------
+// A variable already present in the real environment WINS over the .env entry:
+// JavaExec.environment() otherwise overrides the inherited value, which silently
+// broke the documented `BOOTSTRAP_ADMIN_PASSWORD=... ./gradlew run` one-liner
+// (a blank entry in .env clobbered the shell's value).
 fun loadDotEnv(): Map<String, String> {
     val envFile = file(".env")
     if (!envFile.exists()) return emptyMap()
     return envFile.readLines()
         .filter { it.isNotBlank() && !it.trimStart().startsWith("#") }
         .mapNotNull { line ->
-            val idx = line.indexOf('=')
-            if (idx > 0) line.substring(0, idx).trim() to line.substring(idx + 1).trim()
-            else null
-        }.toMap()
+            val stripped = line.trimStart().removePrefix("export ")
+            val idx = stripped.indexOf('=')
+            if (idx <= 0) return@mapNotNull null
+            val key = stripped.substring(0, idx).trim()
+            // Surrounding quotes are delimiters, not part of the value.
+            val value = stripped.substring(idx + 1).trim().removeSurrounding("\"").removeSurrounding("'")
+            key to value
+        }
+        .filter { (key, _) -> System.getenv(key) == null }
+        .toMap()
 }
 
 tasks.named<JavaExec>("run") {
+    // APP_PORT in .env drives the bound port (see resources/application.yaml), so it
+    // stays consistent with APP_URL instead of being forced past it here.
     environment(loadDotEnv())
-    // Override the Ktor port from application.yaml (8080) so the local JVM
-    // doesn't collide with the Docker-compose app container.
-    args("-port=8082")
 }

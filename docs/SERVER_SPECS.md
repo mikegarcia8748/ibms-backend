@@ -80,12 +80,12 @@ You will **not** need to scale up for more users at this range. Scale up only if
 | Software | Version | Notes |
 |---|---|---|
 | **Java runtime** | **JRE 21** | The [Dockerfile](../Dockerfile) builds and runs on `eclipse-temurin:21`. ⚠️ `build.gradle.kts` sets `jvmToolchain(25)` for local dev — the deployed artifact is Java 21. If you deploy the jar outside Docker, use **JDK/JRE 21** to match the image, or reconcile the toolchain first. |
-| **PostgreSQL** | **16** | Per `docker-compose.yml`. Flyway migrations (V1–V14) run automatically at app startup. |
+| **PostgreSQL** | **16** | Per `docker-compose.yml`. Flyway migrations (V1–V20) run automatically at app startup. |
 | **Docker** | 24+ | |
 | **Docker Compose** | v2 | |
 | **Reverse proxy** | Caddy 2 / Nginx | For TLS — **the app does not terminate TLS itself** (see SECURITY.md). |
 
-The app is a self-contained fat jar (`ibms-backend-all.jar`); no external services are required at this scale. `GEMINI_API_KEY` (OCR) and the `SMTP_*` / `MAIL_FROM_*` relay settings (email) are **optional** — features degrade to simulated/deferred when unset. Outbound mail goes through the org's internal SMTP relay, so there is still no external service to run.
+The app is a self-contained fat jar (`ibms-backend-all.jar`); no external services are required at this scale. The `SMTP_*` / `MAIL_FROM_*` relay settings are needed only when `EMAIL_DELIVERY=smtp`; set `EMAIL_DELIVERY=log` and notifications are logged rather than sent. Outbound mail goes through the org's internal SMTP relay, so there is still no external service to run.
 
 > ⚠️ **Database engine: PostgreSQL only — not SQL Server / MySQL / Oracle.**
 > The backend is hard-wired to PostgreSQL and **cannot run against Microsoft SQL Server (any version — 2016, 2019, 2022)**. It uses the PostgreSQL JDBC driver ([Database.kt:20](../src/adapter/db/Database.kt)), PostgreSQL-only migration SQL (`CREATE EXTENSION pgcrypto` + `citext`, `gen_random_uuid()`, `UUID` columns), the `flyway-database-postgresql` module, and PostgreSQL-specific error handling (`PSQLException`, `PGobject`). Pointing it at SQL Server would require a full rewrite of the driver layer and all migrations — not supported. **If your infrastructure standard is SQL Server, install a separate PostgreSQL instance for this app instead** (they coexist fine on one host). See the step-by-step [Windows Server 2019 + SQL Server 2016 runbook](DEPLOY_WINDOWS_2019.md).

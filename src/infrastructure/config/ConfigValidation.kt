@@ -73,22 +73,27 @@ class ConfigReader(private val getenv: (String) -> String?) {
 
     private val problems = mutableListOf<String>()
 
-    /** Every key this pass looked at, in order. Drives the .env.example drift spec. */
-    val touched: MutableSet<String> = linkedSetOf()
-
-    /** The env name is recorded even when the value is absent — that is the point. */
-    fun raw(name: String, default: String? = null): String? {
-        touched += name
-        return getenv(name)?.takeIf { it.isNotBlank() } ?: default
-    }
+    /**
+     * Always consults [getenv], even when a default exists — ConfigKeysSpec observes
+     * the key set by recording what a passthrough getenv is asked for.
+     */
+    fun raw(name: String, default: String? = null): String? =
+        getenv(name)?.takeIf { it.isNotBlank() } ?: default
 
     fun string(name: String, default: String): String = raw(name, default)!!
 
-    /** For a value with no safe default: absent is a problem, not a fallback. */
-    fun required(name: String, hint: String): String =
+    /**
+     * For a value with no safe default: absent is a problem, not a fallback.
+     *
+     * Returns null rather than a placeholder so the caller can skip checks that depend
+     * on it — otherwise one missing variable reports twice ("must be set" plus
+     * "…is not a valid value") and the operator goes hunting for a second defect that
+     * does not exist.
+     */
+    fun required(name: String, hint: String): String? =
         raw(name) ?: run {
             problem("$name: must be set explicitly ($hint)")
-            PLACEHOLDER
+            null
         }
 
     /** Always keyed: a bare NumberFormatException doesn't say which variable was wrong. */
@@ -126,12 +131,13 @@ class ConfigReader(private val getenv: (String) -> String?) {
     fun csv(name: String, default: String = ""): List<String> =
         string(name, default).split(",").map { it.trim() }.filter { it.isNotEmpty() }
 
-    fun <T : Enum<T>> enum(name: String, default: T?, values: Array<T>): T {
+    /** Null when absent or unrecognised, so dependent checks can be skipped. */
+    fun <T : Enum<T>> enum(name: String, default: T?, values: Array<T>): T? {
         val legal = values.joinToString(", ") { it.name.lowercase() }
         val raw = raw(name, default?.name)
-            ?: return values.first().also { problem("$name: must be set explicitly — one of $legal") }
+            ?: return null.also { problem("$name: must be set explicitly — one of $legal") }
         return values.firstOrNull { it.name.equals(raw, ignoreCase = true) }
-            ?: (default ?: values.first()).also { problem("$name: expected one of $legal, got \"$raw\"") }
+            ?: default.also { problem("$name: expected one of $legal, got \"$raw\"") }
     }
 
     fun problem(message: String) {
@@ -152,8 +158,11 @@ class ConfigReader(private val getenv: (String) -> String?) {
         return built
     }
 
-    private companion object {
-        /** Stands in for a missing required value so construction can continue to [finish]. */
+    companion object {
+        /**
+         * Stands in for a missing required value so the object can be constructed and
+         * every remaining key still checked. Never escapes: [finish] throws first.
+         */
         const val PLACEHOLDER = "<unset>"
     }
 }
