@@ -124,6 +124,12 @@ The app reads all config from **environment variables** (the `.env` auto-load on
 | `STORAGE_LOCAL_DIR` | `C:\ibms\storage` | |
 | `CORS_ALLOWED_HOSTS` | your Wasm client origin(s), comma-separated | ✅ (else falls back to any-host) |
 | `APP_URL` | `https://ibms.your-domain.example` | |
+| `SMTP_HOST` | the org's internal mail relay | ✅ (unset ⇒ notifications are logged, never sent) |
+| `SMTP_PORT` | `587` STARTTLS, `465` implicit TLS, `25` plain | |
+| `SMTP_USERNAME` / `SMTP_PASSWORD` | relay credentials; omit both if the relay takes no AUTH | |
+| `SMTP_STARTTLS` / `SMTP_SSL` | `true`/`false` — `SSL` only with port 465 | |
+| `MAIL_FROM_EMAIL` | the generic address the relay will send as | ✅ (defaults to `SMTP_USERNAME`) |
+| `MAIL_FROM_NAME` | `IBMS Notifications` | |
 
 > Per [SECURITY.md](../SECURITY.md), `JWT_SECRET` and `BOOTSTRAP_ADMIN_PASSWORD` **must** be overridden before production — the code ships with weak known defaults ([AppConfig.kt:74,87](../src/infrastructure/config/AppConfig.kt)).
 
@@ -163,6 +169,15 @@ In `C:\ibms\service\`, put `WinSW.NET4.exe` renamed to `ibms.exe`, alongside `ib
   <env name="STORAGE_LOCAL_DIR" value="C:\ibms\storage"/>
   <env name="CORS_ALLOWED_HOSTS" value="https://ibms-client.your-domain.example"/>
   <env name="APP_URL" value="https://ibms.your-domain.example"/>
+
+  <env name="SMTP_HOST" value="mail-relay.your-domain.example"/>
+  <env name="SMTP_PORT" value="587"/>
+  <env name="SMTP_USERNAME" value="ibms-notifications@your-domain.example"/>
+  <env name="SMTP_PASSWORD" value="CHANGE_ME_relay_password"/>
+  <env name="SMTP_STARTTLS" value="true"/>
+  <env name="SMTP_SSL" value="false"/>
+  <env name="MAIL_FROM_EMAIL" value="ibms-notifications@your-domain.example"/>
+  <env name="MAIL_FROM_NAME" value="IBMS Notifications"/>
 </service>
 ```
 

@@ -13,6 +13,7 @@ import com.puregoldbe.ibms.domain.port.ActivityRecorder
 import com.puregoldbe.ibms.domain.port.IdempotencyContext
 import com.puregoldbe.ibms.domain.port.IdempotencyKeyRepository
 import com.puregoldbe.ibms.domain.port.InvoiceSequenceRepository
+import com.puregoldbe.ibms.domain.port.NotificationEnqueuer
 import com.puregoldbe.ibms.domain.port.StoreRepository
 import com.puregoldbe.ibms.domain.port.TopSheetRepository
 import com.puregoldbe.ibms.domain.port.TransactionRunner
@@ -79,8 +80,9 @@ class ConfirmTopSheetUseCaseSpec : BehaviorSpec({
     val sequences = mockk<InvoiceSequenceRepository>()
     val idempotency: IdempotencyKeyRepository = FakeIdempotencyKeyRepository()
     val activity = mockk<ActivityRecorder>(relaxed = true)
+    val notifications = mockk<NotificationEnqueuer>(relaxed = true)
     val useCase = ConfirmTopSheetUseCase(
-        accounts, stores, topsheets, sequences, idempotency, activity, clock, ImmediateTransactionRunner(),
+        accounts, stores, topsheets, sequences, idempotency, activity, notifications, clock, ImmediateTransactionRunner(),
     )
 
     Given("a DRAFT topsheet with all RFP numbers present and all accounts still eligible") {

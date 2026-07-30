@@ -95,7 +95,9 @@ Environment variables (see [.env.example](.env.example)): `DB_URL`/`DB_USER`/`DB
 `TEMP_PASSWORD_TTL_HOURS`, `REFRESH_TOKEN_TTL_DAYS`, `PASSWORD_CHALLENGE_TTL_MINUTES`,
 `MAX_FAILED_LOGINS`, `LOGIN_LOCKOUT_MINUTES`), `BOOTSTRAP_ADMIN_EMAIL`/`BOOTSTRAP_ADMIN_PASSWORD`,
 `STORAGE_LOCAL_DIR`, `CORS_ALLOWED_HOSTS`, and the (currently optional)
-`GEMINI_API_KEY` / `MAILERSEND_*`. See [SECURITY.md](SECURITY.md) for the production checklist.
+`GEMINI_API_KEY`, and the org SMTP relay (`SMTP_HOST`/`SMTP_PORT`/`SMTP_USERNAME`/`SMTP_PASSWORD`/
+`SMTP_STARTTLS`/`SMTP_SSL`, `MAIL_FROM_EMAIL`/`MAIL_FROM_NAME`) — leave `SMTP_HOST` unset and
+notifications are logged rather than sent. See [SECURITY.md](SECURITY.md) for the production checklist.
 
 ## API
 Paths served at the root (e.g. `/stores`, `/auth/login`) per the API_CONTRACT; JSON;
@@ -116,5 +118,9 @@ auth + sessions).
 - **Activities:** audit log written in-transaction by key mutations; read via `GET /activities`.
 - **Attachments:** presigned upload/download over local-disk storage (`PresignPort` seam for S3/GCS).
 - **OCR:** batch/extract/templates pipeline behind an `OcrGateway` seam, using a deterministic
-  `SimulatedOcrExtractor` stub (swap in real Gemini later); MailerSend email still deferred.
+  `SimulatedOcrExtractor` stub (swap in real Gemini later).
+- **Email notifications:** event-driven emails for 8 user actions, per-user subscriptions
+  (`GET/PUT /users/{id}/notification-subscriptions`), written to the `email_log` outbox inside the
+  triggering transaction and drained by a background dispatcher through an `EmailPort` seam
+  (`SmtpEmailGateway` over the org relay, `SimulatedEmailGateway` when `SMTP_HOST` is unset).
 - **Follow-ups:** see [SECURITY.md](SECURITY.md).

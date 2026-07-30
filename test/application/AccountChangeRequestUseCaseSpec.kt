@@ -17,6 +17,7 @@ import com.puregoldbe.ibms.domain.port.AccountChangeRequestRepository
 import com.puregoldbe.ibms.domain.port.AccountRepository
 import com.puregoldbe.ibms.domain.port.ActivityRecorder
 import com.puregoldbe.ibms.domain.port.AttachmentRepository
+import com.puregoldbe.ibms.domain.port.NotificationEnqueuer
 import com.puregoldbe.ibms.domain.port.ProviderRepository
 import com.puregoldbe.ibms.support.FakeClock
 import com.puregoldbe.ibms.support.ImmediateTransactionRunner
@@ -46,10 +47,11 @@ class AccountChangeRequestUseCaseSpec : BehaviorSpec({
     val providers = mockk<ProviderRepository>(relaxed = false)
     val attachments = mockk<AttachmentRepository>(relaxed = false)
     val activity = mockk<ActivityRecorder>(relaxed = true)
+    val notifications = mockk<NotificationEnqueuer>(relaxed = true)
     val clock = FakeClock(now)
 
     val submitUseCase = SubmitAccountChangeRequestUseCase(requests, accounts, providers, attachments, activity, clock, ImmediateTransactionRunner())
-    val approveUseCase = ApproveAccountChangeRequestUseCase(requests, accounts, providers, activity, clock, ImmediateTransactionRunner())
+    val approveUseCase = ApproveAccountChangeRequestUseCase(requests, accounts, providers, activity, notifications, clock, ImmediateTransactionRunner())
     val rejectUseCase = RejectAccountChangeRequestUseCase(requests, activity, clock, ImmediateTransactionRunner())
     val cancelUseCase = CancelAccountChangeRequestUseCase(requests, activity, clock, ImmediateTransactionRunner())
     val getWithDiffUseCase = GetAccountChangeRequestWithDiffUseCase(requests, accounts, ImmediateTransactionRunner())

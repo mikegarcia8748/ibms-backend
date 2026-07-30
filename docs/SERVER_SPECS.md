@@ -85,7 +85,7 @@ You will **not** need to scale up for more users at this range. Scale up only if
 | **Docker Compose** | v2 | |
 | **Reverse proxy** | Caddy 2 / Nginx | For TLS — **the app does not terminate TLS itself** (see SECURITY.md). |
 
-The app is a self-contained fat jar (`ibms-backend-all.jar`); no external services are required at this scale. `GEMINI_API_KEY` (OCR) and `MAILERSEND_*` (email) are **optional** — features degrade to simulated/deferred when unset.
+The app is a self-contained fat jar (`ibms-backend-all.jar`); no external services are required at this scale. `GEMINI_API_KEY` (OCR) and the `SMTP_*` / `MAIL_FROM_*` relay settings (email) are **optional** — features degrade to simulated/deferred when unset. Outbound mail goes through the org's internal SMTP relay, so there is still no external service to run.
 
 > ⚠️ **Database engine: PostgreSQL only — not SQL Server / MySQL / Oracle.**
 > The backend is hard-wired to PostgreSQL and **cannot run against Microsoft SQL Server (any version — 2016, 2019, 2022)**. It uses the PostgreSQL JDBC driver ([Database.kt:20](../src/adapter/db/Database.kt)), PostgreSQL-only migration SQL (`CREATE EXTENSION pgcrypto` + `citext`, `gen_random_uuid()`, `UUID` columns), the `flyway-database-postgresql` module, and PostgreSQL-specific error handling (`PSQLException`, `PGobject`). Pointing it at SQL Server would require a full rewrite of the driver layer and all migrations — not supported. **If your infrastructure standard is SQL Server, install a separate PostgreSQL instance for this app instead** (they coexist fine on one host). See the step-by-step [Windows Server 2019 + SQL Server 2016 runbook](DEPLOY_WINDOWS_2019.md).

@@ -2,11 +2,15 @@ package com.puregoldbe.ibms.adapter.controller
 
 import com.puregoldbe.ibms.adapter.security.authorize
 import com.puregoldbe.ibms.application.usecase.GetCurrentUserUseCase
+import com.puregoldbe.ibms.application.usecase.GetUserNotificationSubscriptionsUseCase
 import com.puregoldbe.ibms.application.usecase.ListUsersUseCase
 import com.puregoldbe.ibms.application.usecase.ProvisionUserUseCase
 import com.puregoldbe.ibms.application.usecase.ResetUserPasswordUseCase
+import com.puregoldbe.ibms.application.usecase.UpdateUserNotificationSubscriptionsUseCase
 import com.puregoldbe.ibms.application.usecase.UpdateUserRoleUseCase
 import com.puregoldbe.ibms.application.usecase.UpdateUserStatusUseCase
+import com.puregoldbe.ibms.domain.error.DomainError
+import com.puregoldbe.ibms.domain.model.NotificationEvent
 import com.puregoldbe.ibms.domain.model.ProvisionUserRequest
 import com.puregoldbe.ibms.domain.model.UpdateRoleRequest
 import com.puregoldbe.ibms.domain.model.UpdateUserStatusRequest
@@ -21,6 +25,8 @@ fun Route.userRoutes(
     resetUserPassword: ResetUserPasswordUseCase,
     updateUserRole: UpdateUserRoleUseCase,
     updateUserStatus: UpdateUserStatusUseCase,
+    getUserNotificationSubscriptions: GetUserNotificationSubscriptionsUseCase,
+    updateUserNotificationSubscriptions: UpdateUserNotificationSubscriptionsUseCase,
 ) {
     route("/users") {
         get("/me") {
@@ -62,5 +68,26 @@ fun Route.userRoutes(
             val req = call.receive<UpdateUserStatusRequest>()
             call.ok(updateUserStatus(call.pathId(), req.status))
         }
+        // Which event emails a user receives — configured on their profile by the sysad.
+        get("/{id}/notification-subscriptions") {
+            call.authorize(UserRole.SYSADMIN)
+            call.ok(subscriptionsResponse(getUserNotificationSubscriptions(call.pathId())))
+        }
+        put("/{id}/notification-subscriptions") {
+            call.authorize(UserRole.SYSADMIN)
+            val req = call.receive<UpdateNotificationSubscriptionsRequest>()
+            val events = req.events.map { key ->
+                NotificationEvent.fromKey(key)
+                    ?: throw DomainError.Validation("unknown notification event '$key'")
+            }.toSet()
+            call.ok(subscriptionsResponse(updateUserNotificationSubscriptions(call.pathId(), events)))
+        }
     }
 }
+
+/** Build the API view: the user's subscribed event keys + the full selectable catalogue. */
+private fun subscriptionsResponse(subscribed: Set<NotificationEvent>) =
+    NotificationSubscriptionsResponse(
+        subscribed = subscribed.map { it.key }.sorted(),
+        available = NotificationEvent.entries.map { NotificationEventInfo(it.key, it.label) },
+    )

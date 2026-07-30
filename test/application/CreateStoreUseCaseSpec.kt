@@ -2,11 +2,13 @@ package com.puregoldbe.ibms.application
 
 import com.puregoldbe.ibms.application.usecase.CreateStoreUseCase
 import com.puregoldbe.ibms.domain.error.DomainError
+import com.puregoldbe.ibms.domain.model.NotificationEvent
 import com.puregoldbe.ibms.domain.model.Store
 import com.puregoldbe.ibms.domain.model.StoreType
 import com.puregoldbe.ibms.domain.model.StoreUpsertRequest
 import com.puregoldbe.ibms.domain.port.ActivityRecorder
 import com.puregoldbe.ibms.domain.port.AttachmentRepository
+import com.puregoldbe.ibms.domain.port.NotificationEnqueuer
 import com.puregoldbe.ibms.domain.port.StoreRepository
 import com.puregoldbe.ibms.support.ImmediateTransactionRunner
 import io.kotest.assertions.throwables.shouldThrow
@@ -15,6 +17,7 @@ import io.kotest.core.spec.style.BehaviorSpec
 import io.kotest.matchers.shouldBe
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.verify
 import kotlinx.datetime.Instant
 
 /** Business rules: a store needs a valid installation proof and a unique branch code. */
@@ -24,7 +27,8 @@ class CreateStoreUseCaseSpec : BehaviorSpec({
     val stores = mockk<StoreRepository>()
     val attachments = mockk<AttachmentRepository>()
     val activity = mockk<ActivityRecorder>(relaxed = true)
-    val useCase = CreateStoreUseCase(stores, attachments, activity, ImmediateTransactionRunner())
+    val notifications = mockk<NotificationEnqueuer>(relaxed = true)
+    val useCase = CreateStoreUseCase(stores, attachments, activity, notifications, ImmediateTransactionRunner())
 
     val input = StoreUpsertRequest(
         storeType = StoreType.PUREGOLD,
@@ -66,6 +70,12 @@ class CreateStoreUseCaseSpec : BehaviorSpec({
         When("creating the store") {
             Then("the store is persisted") {
                 useCase(input, actorId = "actor").id shouldBe "s1"
+            }
+            Then("a store-created notification is enqueued") {
+                useCase(input, actorId = "actor")
+                verify(exactly = 1) {
+                    notifications.enqueue(eq(NotificationEvent.STORE_CREATED), any())
+                }
             }
         }
     }

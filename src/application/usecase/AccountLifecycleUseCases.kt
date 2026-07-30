@@ -6,10 +6,13 @@ import com.puregoldbe.ibms.domain.model.AccountStatus
 import com.puregoldbe.ibms.domain.model.AccountUpsertRequest
 import com.puregoldbe.ibms.domain.model.CursorPage
 import com.puregoldbe.ibms.domain.model.TransferRecord
+import com.puregoldbe.ibms.domain.model.NotificationContext
+import com.puregoldbe.ibms.domain.model.NotificationEvent
 import com.puregoldbe.ibms.domain.port.AccountRepository
 import com.puregoldbe.ibms.domain.port.ActivityRecorder
 import com.puregoldbe.ibms.domain.port.AttachmentRepository
 import com.puregoldbe.ibms.domain.port.Clock
+import com.puregoldbe.ibms.domain.port.NotificationEnqueuer
 import com.puregoldbe.ibms.domain.port.IdempotencyContext
 import com.puregoldbe.ibms.domain.port.IdempotencyKeyRepository
 import com.puregoldbe.ibms.domain.port.StoreRepository
@@ -30,6 +33,7 @@ class TransferAccountUseCase(
     private val attachments: AttachmentRepository,
     private val idempotency: IdempotencyKeyRepository,
     private val activity: ActivityRecorder,
+    private val notifications: NotificationEnqueuer,
     private val clock: Clock,
     private val tx: TransactionRunner,
 ) {
@@ -46,7 +50,8 @@ class TransferAccountUseCase(
             if (old.status == AccountStatus.TRANSFERRED) {
                 throw DomainError.Conflict("account $accountId has already been transferred")
             }
-            stores.findById(newStoreId) ?: throw DomainError.Validation("unknown newStoreId $newStoreId")
+            val newStore = stores.findById(newStoreId)
+                ?: throw DomainError.Validation("unknown newStoreId $newStoreId")
             PdfProofPolicy.requireUploadedPdf(attachments.findById(proofId), "transfer proofId")
 
             accounts.updateStatus(old.id, AccountStatus.TRANSFERRED)
@@ -73,6 +78,20 @@ class TransferAccountUseCase(
             )
             transfers.create(old.storeId, newStoreId, old.id, moved.id, proofId, actor, clock.now())
             activity.record(actor, "account.transferred", "account", moved.id)
+            val oldStore = stores.findById(old.storeId)
+            notifications.enqueue(
+                NotificationEvent.ACCOUNT_TRANSFERRED,
+                NotificationContext(
+                    headline = "Account ${old.accountNumber} transferred to ${newStore.name} (Branch ${newStore.branchCode})",
+                    details = listOfNotNull(
+                        "Account number" to old.accountNumber,
+                        oldStore?.let { "From store" to "${it.name} (Branch ${it.branchCode})" },
+                        "To store" to "${newStore.name} (Branch ${newStore.branchCode})",
+                    ),
+                    entityId = moved.id,
+                    linkPath = "/accounts/${moved.id}",
+                ),
+            )
             moved
         }
     }
@@ -93,6 +112,7 @@ class DeactivateAccountUseCase(
     private val attachments: AttachmentRepository,
     private val idempotency: IdempotencyKeyRepository,
     private val activity: ActivityRecorder,
+    private val notifications: NotificationEnqueuer,
     private val clock: Clock,
     private val tx: TransactionRunner,
 ) {
@@ -113,6 +133,15 @@ class DeactivateAccountUseCase(
                 ?: throw DomainError.NotFound("account $accountId not found")
             accounts.linkProof(accountId, proofId)
             activity.record(actorId, "account.deactivation_requested", "account", accountId)
+            notifications.enqueue(
+                NotificationEvent.ACCOUNT_DEACTIVATION_REQUESTED,
+                NotificationContext(
+                    headline = "Termination requested for account ${account.accountNumber}",
+                    details = listOf("Account number" to account.accountNumber),
+                    entityId = accountId,
+                    linkPath = "/accounts/$accountId",
+                ),
+            )
             result
         }
     }
