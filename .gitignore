@@ -12,3 +12,6 @@ storage/
 # OS / editor / logs
 .DS_Store
 *.log
+/.claude/worktrees/feature+email-notifications/
+/.idea/compiler.xml
+/.idea/AndroidProjectSystem.xml
