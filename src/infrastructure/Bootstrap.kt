@@ -17,14 +17,19 @@ import com.puregoldbe.ibms.adapter.security.BcryptPasswordHasher
 import com.puregoldbe.ibms.adapter.security.JwtService
 import com.puregoldbe.ibms.adapter.security.LocalHmacPresign
 import com.puregoldbe.ibms.adapter.security.SecureRandomSecrets
+import com.puregoldbe.ibms.adapter.security.authorize
 import com.puregoldbe.ibms.adapter.security.configureAuthentication
 import com.puregoldbe.ibms.application.usecase.*
+import com.puregoldbe.ibms.configureMonitoring
+import com.puregoldbe.ibms.domain.model.UserRole
 import com.puregoldbe.ibms.domain.port.EmailPort
 import com.puregoldbe.ibms.infrastructure.config.AppConfig
+import com.puregoldbe.ibms.infrastructure.config.EmailDelivery
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.auth.*
 import io.ktor.server.plugins.cors.routing.*
+import io.ktor.server.response.respond
 import io.ktor.server.routing.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -46,9 +51,17 @@ fun Application.module() = moduleWith(AppConfig.fromEnv())
  * `module` would make it try to inject the AppConfig parameter and fail to boot).
  */
 fun Application.moduleWith(cfg: AppConfig) {
-    if (cfg.jwt.secret == "dev-secret-change-me") {
-        log.warn("[security] JWT_SECRET is the built-in default — set a strong secret before production.")
-    }
+    // Secret strength and the fail-closed rules are enforced in AppConfig.fromEnv();
+    // this re-check catches a hand-built config that never went through it.
+    cfg.requireCoherent()
+    log.info(
+        "[config] APP_ENV={} db={} email={} cors={} appUrl={}",
+        cfg.appEnv.name.lowercase(),
+        cfg.db.url,
+        cfg.emailDelivery.name.lowercase(),
+        if (cfg.corsAllowedHosts.isEmpty()) "any-host" else cfg.corsAllowedHosts.joinToString(","),
+        cfg.appUrl,
+    )
 
     // --- Database (Hikari + Flyway + Exposed) ---
     val dataSource = buildDataSource(cfg.db)
@@ -68,15 +81,21 @@ fun Application.moduleWith(cfg: AppConfig) {
     val passwordHasher = BcryptPasswordHasher(cfg.auth.bcryptCost)
     val secrets = SecureRandomSecrets()
     val sessionPolicy = cfg.auth.sessionPolicy()
-    val presign = LocalHmacPresign(cfg.jwt.secret, cfg.appUrl, clock)
+    val presign = LocalHmacPresign(cfg.presignSecret, cfg.appUrl, clock)
+    // OCR extraction and the external RFP system have no HTTP adapter yet; their
+    // config keys return alongside the adapters that consume them.
     val ocrGateway = SimulatedOcrExtractor()
-    // External RFP system. Simulated until cfg.rfpApiBaseUrl is set + an HTTP adapter lands.
     val rfpGateway = SimulatedRfpGateway()
-    // Outbound email. Real delivery through the org SMTP relay when one is configured;
-    // otherwise a logging stub so local dev + tests run the whole enqueue->dispatch
-    // pipeline end-to-end.
-    val emailGateway: EmailPort =
-        if (cfg.smtp != null) SmtpEmailGateway(cfg.smtp) else SimulatedEmailGateway()
+    // Outbound email. Stated by EMAIL_DELIVERY rather than inferred from whether a
+    // relay happens to be configured — a prod deploy that merely forgot SMTP_HOST
+    // used to drop every notification silently.
+    val emailGateway: EmailPort = when (cfg.emailDelivery) {
+        // Non-null by requireCoherent(): EMAIL_DELIVERY=smtp implies a relay.
+        EmailDelivery.SMTP -> SmtpEmailGateway(cfg.smtp!!)
+        EmailDelivery.LOG -> SimulatedEmailGateway().also {
+            log.warn("[email] EMAIL_DELIVERY=log — notifications are logged, not sent.")
+        }
+    }
 
     val users = ExposedUserRepository()
     val sessions = ExposedSessionRepository()
@@ -179,6 +198,7 @@ fun Application.moduleWith(cfg: AppConfig) {
 
     // --- Cross-cutting plugins ---
     configureStatusPages()
+    val metrics = configureMonitoring()
     install(CORS) {
         allowMethod(HttpMethod.Get)
         allowMethod(HttpMethod.Post)
@@ -189,6 +209,12 @@ fun Application.moduleWith(cfg: AppConfig) {
         allowHeader(HttpHeaders.ContentType)
         allowHeader("Idempotency-Key")
         if (cfg.corsAllowedHosts.isEmpty()) {
+            // Redundant with fromEnv() by design: the fail-closed property should be
+            // readable at the site that would otherwise fail open.
+            check(!cfg.appEnv.isHardened) {
+                "CORS_ALLOWED_HOSTS is empty — refusing to allow any host with APP_ENV=${cfg.appEnv.name.lowercase()}"
+            }
+            this@moduleWith.log.warn("[security] CORS is open to any host (APP_ENV=dev).")
             anyHost()
         } else {
             cfg.corsAllowedHosts.forEach { allowHost(it, schemes = listOf("http", "https")) }
@@ -226,6 +252,12 @@ fun Application.moduleWith(cfg: AppConfig) {
             dashboardRoutes(dashboardSummary, listDashboardAccounts, listBillingHistory, listStores, exportAccounts)
             attachmentRoutes(presignUpload, presignDownload)
             jobRoutes(expireGrace)
+            // Request timings and JVM internals — sysadmin only. Point Prometheus at
+            // this with a service account rather than scraping it anonymously.
+            get("/metrics-micrometer") {
+                call.authorize(UserRole.SYSADMIN)
+                call.respond(metrics.scrape())
+            }
         }
     }
 

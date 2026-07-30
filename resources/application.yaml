@@ -1,9 +1,11 @@
 ktor:
   deployment:
-    port: 8080
+    # APP_PORT so the bound port and APP_URL can agree; 8080 in Docker, 8082 locally.
+    port: "$APP_PORT:8080"
   application:
     modules:
-      - com.puregoldbe.ibms.MonitoringKt.configureMonitoring
+      # Monitoring is installed by BootstrapKt.module instead, so its scrape route can
+      # sit behind the authentication provider that module registers.
       - com.puregoldbe.ibms.SerializationKt.configureSerialization
       - com.puregoldbe.ibms.RoutingKt.configureRouting
       - com.puregoldbe.ibms.infrastructure.BootstrapKt.module
