@@ -30,28 +30,33 @@ unit-testable with in-memory fakes. Ports live in `domain/port`; adapters implem
 
 ## Run locally
 ```bash
+cp .env.example .env                                     # sets APP_ENV=dev; see Configuration
 docker compose up -d --wait                              # local Postgres 16 on :5432
-BOOTSTRAP_ADMIN_PASSWORD='Local-Devpassw0rd' ./gradlew run   # Flyway migrates, serves on :8080
+BOOTSTRAP_ADMIN_PASSWORD='Local-Devpassw0rd' ./gradlew run   # Flyway migrates, serves on :8082
 ```
+`.env` is loaded only by `./gradlew run`; a real environment variable wins over an
+entry in it, so the override above takes effect. The packaged jar and Docker read the
+process environment instead.
 There is no password-bypass shortcut — local dev uses the same flow as production.
 The bootstrap admin starts with a temporary password, so sign in and exchange it:
 ```bash
 # 1. log in with the temporary password -> a change-password challenge
-CHALLENGE=$(curl -s -X POST localhost:8080/auth/login \
+CHALLENGE=$(curl -s -X POST localhost:8082/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"username":"mike.pgmobiledev","password":"Local-Devpassw0rd"}' \
+  -d '{"username":"mikepg","password":"Local-Devpassw0rd"}' \
   | python3 -c 'import sys,json;print(json.load(sys.stdin)["data"]["passwordChange"]["challengeToken"])')
 
 # 2. set a real password -> this is where the session starts
-TOKEN=$(curl -s -X POST localhost:8080/auth/password/change \
+TOKEN=$(curl -s -X POST localhost:8082/auth/password/change \
   -H "Authorization: Bearer $CHALLENGE" -H 'Content-Type: application/json' \
   -d '{"newPassword":"Chosen-Passw0rd!"}' \
   | python3 -c 'import sys,json;print(json.load(sys.stdin)["data"]["session"]["accessToken"])')
 
-curl localhost:8080/stores -H "Authorization: Bearer $TOKEN"
+curl localhost:8082/stores -H "Authorization: Bearer $TOKEN"
 ```
 On later runs, `POST /auth/login` returns the tokens directly.
-Run on a different port: `./gradlew run --args="-port=8081"`.
+Run on a different port: set `APP_PORT` (in `.env` or the environment). Keep `APP_URL`
+in step with it — presigned attachment links are built from `APP_URL`.
 
 ## Authentication flow
 Accounts are provisioned by a sysadmin — there is no self-registration, and a
@@ -74,8 +79,11 @@ rotates the pair (the old refresh token is revoked as it is used),
 session, and `POST /users/{id}/reset-password` (sysadmin) issues a fresh
 temporary password and revokes that user's sessions.
 
-On a brand-new database the seeded sysadmin has no password; the backend installs
-`BOOTSTRAP_ADMIN_PASSWORD` at first startup, or generates one and logs it once.
+On a brand-new database the seeded sysadmin (username `mikepg`) has no password; the
+backend installs `BOOTSTRAP_ADMIN_PASSWORD` at first startup, or — when that is unset
+and `BOOTSTRAP_ADMIN_AUTOGENERATE_PASSWORD=true` (the default in dev) — generates one
+and logs it exactly once. It is a no-op once a password exists, so restarting with the
+variable set cannot take over a live account.
 
 ## Test
 ```bash
@@ -90,14 +98,22 @@ docker build -t ibms-backend .
 The image runs the executable fat jar; all config is via environment variables.
 
 ## Configuration
-Environment variables (see [.env.example](.env.example)): `DB_URL`/`DB_USER`/`DB_PASSWORD`,
-`JWT_SECRET`/`JWT_ISSUER`/`JWT_AUDIENCE`, the password-auth knobs (`BCRYPT_COST`,
-`TEMP_PASSWORD_TTL_HOURS`, `REFRESH_TOKEN_TTL_DAYS`, `PASSWORD_CHALLENGE_TTL_MINUTES`,
-`MAX_FAILED_LOGINS`, `LOGIN_LOCKOUT_MINUTES`), `BOOTSTRAP_ADMIN_EMAIL`/`BOOTSTRAP_ADMIN_PASSWORD`,
-`STORAGE_LOCAL_DIR`, `CORS_ALLOWED_HOSTS`, and the (currently optional)
-`GEMINI_API_KEY`, and the org SMTP relay (`SMTP_HOST`/`SMTP_PORT`/`SMTP_USERNAME`/`SMTP_PASSWORD`/
-`SMTP_STARTTLS`/`SMTP_SSL`, `MAIL_FROM_EMAIL`/`MAIL_FROM_NAME`) — leave `SMTP_HOST` unset and
-notifications are logged rather than sent. See [SECURITY.md](SECURITY.md) for the production checklist.
+[.env.example](.env.example) is the canonical list of every variable, with a comment on
+each explaining what it controls and how it behaves per environment. `ConfigKeysSpec`
+fails the build if that file and `AppConfig` drift apart, so it cannot go stale.
+
+Everything is read from the process environment at startup and validated in one pass:
+a bad or missing value produces a single boot failure listing *every* problem, rather
+than one per restart.
+
+**`APP_ENV` is the switch that matters.** It defaults to `prod` when unset, so a
+deployment that forgets it fails loudly instead of silently taking the permissive
+local-dev path. Under `staging`/`prod`, `JWT_SECRET` (length- and
+placeholder-checked), `DB_PASSWORD`, `APP_URL` (https, non-localhost),
+`CORS_ALLOWED_HOSTS` (no any-host fallback), `EMAIL_DELIVERY` and the bootstrap-admin
+settings must all be set explicitly. Under `dev` the local defaults apply.
+
+See [SECURITY.md](SECURITY.md) for the production checklist.
 
 ## API
 Paths served at the root (e.g. `/stores`, `/auth/login`) per the API_CONTRACT; JSON;
@@ -122,5 +138,5 @@ auth + sessions).
 - **Email notifications:** event-driven emails for 8 user actions, per-user subscriptions
   (`GET/PUT /users/{id}/notification-subscriptions`), written to the `email_log` outbox inside the
   triggering transaction and drained by a background dispatcher through an `EmailPort` seam
-  (`SmtpEmailGateway` over the org relay, `SimulatedEmailGateway` when `SMTP_HOST` is unset).
+  (`SmtpEmailGateway` over the org relay, `SimulatedEmailGateway` when `EMAIL_DELIVERY=log`).
 - **Follow-ups:** see [SECURITY.md](SECURITY.md).

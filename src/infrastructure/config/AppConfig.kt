@@ -130,13 +130,17 @@ data class AppConfig(
          * environment. Throws [ConfigException] listing every problem found.
          */
         fun fromEnv(getenv: (String) -> String? = System::getenv): AppConfig = with(ConfigReader(getenv)) {
-            val appEnv = enum("APP_ENV", default = AppEnv.PROD, AppEnv.entries.toTypedArray())
+            // An unrecognised APP_ENV falls back to the hardened default rather than the
+            // permissive one; the boot fails either way, but the report reads correctly.
+            val appEnv = enum("APP_ENV", default = AppEnv.PROD, AppEnv.entries.toTypedArray()) ?: AppEnv.PROD
             val hardened = appEnv.isHardened
 
+            // Each dependent check below is guarded on the value being present, so one
+            // missing variable produces one problem instead of two.
             val jwtSecret =
                 if (hardened) required("JWT_SECRET", "at least ${SecretRules.MIN_SECRET_LENGTH} random characters")
                 else string("JWT_SECRET", "dev-secret-change-me")
-            if (hardened) SecretRules.reject(jwtSecret)?.let { problem("JWT_SECRET: $it") }
+            if (hardened && jwtSecret != null) SecretRules.reject(jwtSecret)?.let { problem("JWT_SECRET: $it") }
 
             val corsAllowedHosts = csv("CORS_ALLOWED_HOSTS")
             check(
@@ -148,7 +152,7 @@ data class AppConfig(
             val appUrl =
                 if (hardened) required("APP_URL", "the public base URL clients and presigned links resolve against")
                 else string("APP_URL", "http://localhost:8082")
-            if (hardened) {
+            if (hardened && appUrl != null) {
                 check(
                     !appUrl.contains("localhost"),
                     "APP_URL: must be the public base URL, not localhost (presigned attachment links are built from it)",
@@ -172,7 +176,7 @@ data class AppConfig(
                 if (hardened) required("DB_PASSWORD", "the database role's password")
                 else string("DB_PASSWORD", "ibms")
             check(
-                !hardened || dbPassword != "ibms",
+                !hardened || dbPassword == null || dbPassword != "ibms",
                 "DB_PASSWORD: the built-in local-dev value \"ibms\" is not permitted when APP_ENV=${appEnv.name.lowercase()}",
             )
 
@@ -192,17 +196,19 @@ data class AppConfig(
                 )
             }
 
+            // PLACEHOLDER stands in for anything missing so the remaining keys still get
+            // checked. It never escapes: finish() throws whenever a problem was recorded.
             finish(appEnv) {
                 AppConfig(
                     appEnv = appEnv,
                     db = DbConfig(
                         url = string("DB_URL", "jdbc:postgresql://localhost:5432/ibms"),
                         user = string("DB_USER", "ibms"),
-                        password = dbPassword,
+                        password = dbPassword ?: ConfigReader.PLACEHOLDER,
                         poolSize = int("DB_POOL_SIZE", default = 10, range = 1..100),
                     ),
                     jwt = JwtConfig(
-                        secret = jwtSecret,
+                        secret = jwtSecret ?: ConfigReader.PLACEHOLDER,
                         issuer = string("JWT_ISSUER", "ibms-backend"),
                         audience = string("JWT_AUDIENCE", "ibms-app"),
                         // Capped at a day: a long-lived access token cannot be revoked,
@@ -221,16 +227,19 @@ data class AppConfig(
                         maxFailedLogins = int("MAX_FAILED_LOGINS", default = 5, range = 1..20),
                         lockoutMinutes = long("LOGIN_LOCKOUT_MINUTES", default = 15, range = 1L..1_440L),
                         bootstrapAdminUsername =
-                            if (hardened) required("BOOTSTRAP_ADMIN_USERNAME", "the username of the seeded sysadmin")
-                            else string("BOOTSTRAP_ADMIN_USERNAME", "mikepg"),
+                            (
+                                if (hardened) required("BOOTSTRAP_ADMIN_USERNAME", "the username of the seeded sysadmin")
+                                else string("BOOTSTRAP_ADMIN_USERNAME", "mikepg")
+                                ) ?: ConfigReader.PLACEHOLDER,
                         bootstrapAdminPassword = bootstrapAdminPassword,
                     ),
                     storageLocalDir = string("STORAGE_LOCAL_DIR", "./storage"),
                     corsAllowedHosts = corsAllowedHosts,
-                    emailDelivery = emailDelivery,
+                    emailDelivery = emailDelivery ?: EmailDelivery.LOG,
                     smtp = smtp,
-                    appUrl = appUrl,
-                    presignSecret = raw("PRESIGN_SECRET") ?: derivePresignSecret(jwtSecret),
+                    appUrl = appUrl ?: ConfigReader.PLACEHOLDER,
+                    presignSecret = raw("PRESIGN_SECRET")
+                        ?: derivePresignSecret(jwtSecret ?: ConfigReader.PLACEHOLDER),
                 )
             }
         }
@@ -241,8 +250,11 @@ data class AppConfig(
          * authenticated); a queued row that could only ever fail to send is worse than
          * a boot that refuses, so its absence is a problem rather than a warning.
          */
-        private fun ConfigReader.smtpFromEnv(delivery: EmailDelivery): SmtpConfig? {
+        private fun ConfigReader.smtpFromEnv(delivery: EmailDelivery?): SmtpConfig? {
             val host = raw("SMTP_HOST")
+            // Null delivery already reported itself; cascading SMTP requirements off it
+            // would send the operator chasing problems that don't exist.
+            if (delivery == null) return null
             if (delivery != EmailDelivery.SMTP) {
                 check(
                     host == null,
