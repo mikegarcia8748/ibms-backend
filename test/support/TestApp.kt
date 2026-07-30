@@ -48,7 +48,10 @@ fun testAppConfig(mutate: AppConfig.() -> AppConfig = { this }): AppConfig = App
     presignSecret = "test-presign-secret",
 ).mutate()
 
-fun Application.testModule() {
+fun Application.testModule() = testModule(testAppConfig())
+
+/** For specs that need a config other than the default, e.g. a different bootstrap admin. */
+fun Application.testModule(cfg: AppConfig) {
     configureSerialization()
-    moduleWith(testAppConfig())
+    moduleWith(cfg)
 }
