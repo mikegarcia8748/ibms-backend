@@ -12,6 +12,6 @@ storage/
 # OS / editor / logs
 .DS_Store
 *.log
-/.idea/.name
-/.idea/AndroidProjectSystem.xml
 /.idea/compiler.xml
+/.idea/AndroidProjectSystem.xml
+/.idea/.name
