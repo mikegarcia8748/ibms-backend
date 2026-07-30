@@ -3,7 +3,9 @@ package com.puregoldbe.ibms.support
 import com.puregoldbe.ibms.adapter.security.BcryptPasswordHasher
 import com.puregoldbe.ibms.configureSerialization
 import com.puregoldbe.ibms.infrastructure.config.AppConfig
+import com.puregoldbe.ibms.infrastructure.config.AppEnv
 import com.puregoldbe.ibms.infrastructure.config.AuthConfig
+import com.puregoldbe.ibms.infrastructure.config.EmailDelivery
 import com.puregoldbe.ibms.infrastructure.config.JwtConfig
 import com.puregoldbe.ibms.infrastructure.moduleWith
 import io.ktor.server.application.Application
@@ -13,8 +15,15 @@ import io.ktor.server.application.Application
  * composition root (Bootstrap) against the shared Testcontainers Postgres —
  * the same wiring production gets, minus Micrometer metrics. Specs obtain a
  * token through the real login endpoint; see `signIn()` in TestAuth.
+ *
+ * Deliberately hand-built rather than going through `AppConfig.fromEnv()`: the
+ * env-reading and validation logic is covered by `AppConfigSpec` as a pure unit,
+ * with no container and no process-environment mutation. Pass [mutate] to vary one
+ * field for a spec that needs a different wiring.
  */
-fun testAppConfig(): AppConfig = AppConfig(
+fun testAppConfig(mutate: AppConfig.() -> AppConfig = { this }): AppConfig = AppConfig(
+    // Dev rules: the hardened fail-closed checks are exercised in AppConfigSpec.
+    appEnv = AppEnv.DEV,
     db = PostgresTestDb.dbConfig,
     jwt = JwtConfig(secret = "test-secret", issuer = "ibms-backend", audience = "ibms-app", expiresMinutes = 720),
     // Cost 4 is the bcrypt minimum. Production cost (12) is ~100ms per hash by
@@ -31,13 +40,13 @@ fun testAppConfig(): AppConfig = AppConfig(
     ),
     storageLocalDir = System.getProperty("java.io.tmpdir").trimEnd('/') + "/ibms-test-storage",
     corsAllowedHosts = emptyList(),
-    geminiApiKey = null,
-    // No relay configured → the suite runs through SimulatedEmailGateway.
+    // No relay configured → the suite runs the enqueue -> dispatch pipeline through
+    // SimulatedEmailGateway.
+    emailDelivery = EmailDelivery.LOG,
     smtp = null,
     appUrl = "http://localhost:8080",
-    rfpApiBaseUrl = null,
-    rfpApiKey = null,
-)
+    presignSecret = "test-presign-secret",
+).mutate()
 
 fun Application.testModule() {
     configureSerialization()
