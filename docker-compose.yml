@@ -43,6 +43,17 @@ services:
       # a random password today — AppConfig defaults it to a literal. See the
       # comment on BOOTSTRAP_ADMIN_PASSWORD in .env.example.
       BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
+      # Outbound email. This block is an explicit allowlist, not env_file — anything
+      # missing here is simply absent inside the container, and unset SMTP_HOST means
+      # notifications are logged, not sent.
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
+      SMTP_SSL: ${SMTP_SSL:-false}
+      MAIL_FROM_EMAIL: ${MAIL_FROM_EMAIL:-}
+      MAIL_FROM_NAME: ${MAIL_FROM_NAME:-IBMS Notifications}
     volumes:
       - ibms-storage:/app/storage
 

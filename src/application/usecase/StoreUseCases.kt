@@ -6,10 +6,13 @@ import com.puregoldbe.ibms.domain.model.CursorPage
 import com.puregoldbe.ibms.domain.model.Store
 import com.puregoldbe.ibms.domain.model.StoreStatus
 import com.puregoldbe.ibms.domain.model.StoreUpsertRequest
+import com.puregoldbe.ibms.domain.model.NotificationContext
+import com.puregoldbe.ibms.domain.model.NotificationEvent
 import com.puregoldbe.ibms.domain.port.AccountRepository
 import com.puregoldbe.ibms.domain.port.ActivityRecorder
 import com.puregoldbe.ibms.domain.port.AttachmentRepository
 import com.puregoldbe.ibms.domain.port.Clock
+import com.puregoldbe.ibms.domain.port.NotificationEnqueuer
 import com.puregoldbe.ibms.domain.port.StoreRepository
 import com.puregoldbe.ibms.domain.port.TransactionRunner
 import kotlinx.serialization.Serializable
@@ -38,6 +41,7 @@ class CreateStoreUseCase(
     private val stores: StoreRepository,
     private val attachments: AttachmentRepository,
     private val activity: ActivityRecorder,
+    private val notifications: NotificationEnqueuer,
     private val tx: TransactionRunner,
 ) {
     suspend operator fun invoke(input: StoreUpsertRequest, actorId: String?): Store = tx.inTransaction {
@@ -51,6 +55,19 @@ class CreateStoreUseCase(
         }
         val store = stores.create(input, actorId)
         activity.record(actorId, "store.created", "store", store.id)
+        notifications.enqueue(
+            NotificationEvent.STORE_CREATED,
+            NotificationContext(
+                headline = "New store added: ${store.name} (Branch ${store.branchCode})",
+                details = listOf(
+                    "Branch code" to store.branchCode,
+                    "Store name" to store.name,
+                    "Type" to store.storeType.name.lowercase(),
+                ),
+                entityId = store.id,
+                linkPath = "/stores/${store.id}",
+            ),
+        )
         store
     }
 }

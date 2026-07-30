@@ -276,6 +276,32 @@ object OcrExtractedRows : UUIDTable("ocr_extracted_rows") {
     val reconciled         = bool("reconciled")
 }
 
+/**
+ * Outbox for event-driven notifications. Rows are inserted `queued` inside the
+ * triggering transaction and drained by the background dispatcher. Maps the
+ * existing V1 email_log table 1:1 — `to_emails` is a Postgres TEXT[].
+ */
+object EmailLog : UUIDTable("email_log") {
+    val type             = text("type").nullable()
+    val fromEmail        = text("from_email").nullable()
+    val toEmails         = array<String>("to_emails")
+    val subject          = text("subject").nullable()
+    val bodyText         = text("body_text").nullable()
+    val bodyHtml         = text("body_html").nullable()
+    val status           = text("status")
+    val providerResponse = text("provider_response").nullable()
+    val createdAt        = timestamp("created_at")
+    val sentAt           = timestamp("sent_at").nullable()
+}
+
+/** Per-user notification subscriptions (V19); one row per (user, event) the user opts into. */
+object UserNotificationSubscriptions : Table("user_notification_subscriptions") {
+    val userId    = reference("user_id", Users)
+    val eventType = text("event_type")
+    val createdAt = timestamp("created_at")
+    override val primaryKey = PrimaryKey(userId, eventType)
+}
+
 object AccountChangeRequests : UUIDTable("account_change_requests") {
     val accountId           = reference("account_id", Accounts)
     val submittedById       = reference("submitted_by_id", Users)

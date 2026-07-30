@@ -1,8 +1,11 @@
 package com.puregoldbe.ibms.application.usecase
 
 import com.puregoldbe.ibms.domain.model.AccountStatus
+import com.puregoldbe.ibms.domain.model.NotificationContext
+import com.puregoldbe.ibms.domain.model.NotificationEvent
 import com.puregoldbe.ibms.domain.port.AccountRepository
 import com.puregoldbe.ibms.domain.port.Clock
+import com.puregoldbe.ibms.domain.port.NotificationEnqueuer
 import com.puregoldbe.ibms.domain.port.TransactionRunner
 import com.puregoldbe.ibms.domain.service.GracePeriodPolicy
 import kotlinx.datetime.DateTimeUnit
@@ -19,6 +22,7 @@ import kotlinx.datetime.minus
  */
 class ExpireGracePeriodAccountsUseCase(
     private val accounts: AccountRepository,
+    private val notifications: NotificationEnqueuer,
     private val clock: Clock,
     private val tx: TransactionRunner,
 ) {
@@ -26,7 +30,18 @@ class ExpireGracePeriodAccountsUseCase(
         val now = clock.now()
         val cutoff = now.minus(GracePeriodPolicy.GRACE_DAYS, DateTimeUnit.DAY, TimeZone.UTC)
         val expired = accounts.findExpiredGrace(cutoff)
-        expired.forEach { accounts.updateStatus(it.id, AccountStatus.INACTIVE) }
+        expired.forEach { account ->
+            accounts.updateStatus(account.id, AccountStatus.INACTIVE)
+            notifications.enqueue(
+                NotificationEvent.ACCOUNT_TERMINATED,
+                NotificationContext(
+                    headline = "Account ${account.accountNumber} terminated (30-day grace period elapsed)",
+                    details = listOf("Account number" to account.accountNumber),
+                    entityId = account.id,
+                    linkPath = "/accounts/${account.id}",
+                ),
+            )
+        }
         expired.size
     }
 }
