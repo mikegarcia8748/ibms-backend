@@ -599,4 +599,74 @@ class TopSheetDraftFlowSpec : BehaviorSpec({
             }
         }
     }
+
+    Given("two providers whose names collapse to the same invoice acronym") {
+        When("each confirms a top sheet in the same billing period") {
+            // The acronym is the first 4 characters of a single-word provider name, and every
+            // provider's invoice sequence starts at 1 — so "Converge" and "Convergys" both mint
+            // <ACRONYM>-YYYYMM-0001. Under the pre-V22 global UNIQUE on topsheets.invoice_number
+            // the second provider hit 23505 -> 409 and could never bill that period.
+            Then("both succeed, even though they mint the same invoice number") {
+                testApplication {
+                    application { testModule() }
+
+                    val token = signIn(UserRole.SYSADMIN).token
+                    val s = System.nanoTime().toString()
+
+                    val attachmentId = client.post("/attachments/presign/upload") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                        contentType(ContentType.Application.Json)
+                        setBody("""{"fileName":"proof.txt","contentType":"text/plain","purpose":"installation_proof"}""")
+                    }.bodyAsText().asJson().data().str("attachmentId")
+
+                    /** Seed a provider + store + one account, then draft and confirm. */
+                    suspend fun confirmFor(providerName: String, tag: String): JsonObject {
+                        val providerId = client.post("/providers") {
+                            header(HttpHeaders.Authorization, "Bearer $token")
+                            contentType(ContentType.Application.Json)
+                            setBody("""{"name":"$providerName","paymentScheduleDay":15}""")
+                        }.bodyAsText().asJson().data().str("id")
+
+                        val storeId = client.post("/stores") {
+                            header(HttpHeaders.Authorization, "Bearer $token")
+                            contentType(ContentType.Application.Json)
+                            setBody(
+                                """{"storeType":"puregold","branchCode":"$tag-$s","name":"Store $tag","proofOfInstallationId":"$attachmentId"}""",
+                            )
+                        }.bodyAsText().asJson().data().str("id")
+
+                        val proofId = uploadPdfProof(token, "subscription_proof")
+                        client.post("/accounts") {
+                            header(HttpHeaders.Authorization, "Bearer $token")
+                            contentType(ContentType.Application.Json)
+                            setBody(
+                                """{"accountNumber":"$tag-$s","providerId":"$providerId","storeId":"$storeId","rate":"1000","installationDate":"2020-01-01","subscriptionProofIds":["$proofId"]}""",
+                            )
+                        }.status shouldBe HttpStatusCode.Created
+
+                        val draftId = client.post("/topsheets/draft") {
+                            header(HttpHeaders.Authorization, "Bearer $token")
+                            contentType(ContentType.Application.Json)
+                            setBody("""{"providerId":"$providerId","billingPeriod":"$currentPeriod"}""")
+                        }.bodyAsText().asJson().data().str("id")
+
+                        val confirm = client.post("/topsheets/$draftId/confirm") {
+                            header(HttpHeaders.Authorization, "Bearer $token")
+                        }
+                        confirm.status shouldBe HttpStatusCode.OK
+                        return confirm.bodyAsText().asJson().data()
+                    }
+
+                    val first = confirmFor("Converge-A$s", "CVA")
+                    val second = confirmFor("Convergys-B$s", "CVB")
+
+                    // Same acronym, same period, each provider's own sequence at 1 — so the two
+                    // invoice numbers are byte-identical across different providers.
+                    first.str("invoiceNumber") shouldBe second.str("invoiceNumber")
+                    first.str("invoiceNumber").startsWith("CONV-") shouldBe true
+                    first.str("invoiceNumber").endsWith("-0001") shouldBe true
+                }
+            }
+        }
+    }
 })

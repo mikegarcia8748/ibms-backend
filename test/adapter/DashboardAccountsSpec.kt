@@ -9,6 +9,7 @@ import com.puregoldbe.ibms.domain.model.UserRole
 import com.puregoldbe.ibms.support.PostgresTestDb
 import com.puregoldbe.ibms.support.signIn
 import com.puregoldbe.ibms.support.testModule
+import com.puregoldbe.ibms.support.uploadPdfProof
 import io.kotest.core.spec.style.BehaviorSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.collections.shouldContain
@@ -65,11 +66,12 @@ class DashboardAccountsSpec : BehaviorSpec({
                         )
                     }.bodyAsText().asJson().data().str("id")
 
+                    val subProof = uploadPdfProof(adminToken, "subscription_proof")
                     client.post("/accounts") {
                         header(HttpHeaders.Authorization, "Bearer $adminToken")
                         contentType(ContentType.Application.Json)
                         setBody(
-                            """{"accountNumber":"acc-$s-1","providerId":"$providerId","storeId":"$storeId","rate":"1234","installationDate":"2020-01-01"}""",
+                            """{"accountNumber":"acc-$s-1","providerId":"$providerId","storeId":"$storeId","rate":"1234","installationDate":"2020-01-01","subscriptionProofIds":["$subProof"]}""",
                         )
                     }.status shouldBe HttpStatusCode.Created
 
@@ -134,14 +136,20 @@ class DashboardAccountsSpec : BehaviorSpec({
                         )
                     }.bodyAsText().asJson().data().str("id")
 
-                    suspend fun createAccount(num: String): String =
-                        client.post("/accounts") {
+                    suspend fun createAccount(num: String): String {
+                        val subProof = uploadPdfProof(adminToken, "subscription_proof")
+                        val res = client.post("/accounts") {
                             header(HttpHeaders.Authorization, "Bearer $adminToken")
                             contentType(ContentType.Application.Json)
                             setBody(
-                                """{"accountNumber":"$num","providerId":"$providerId","storeId":"$storeId","rate":"1000","installationDate":"2020-01-01"}""",
+                                """{"accountNumber":"$num","providerId":"$providerId","storeId":"$storeId","rate":"1000","installationDate":"2020-01-01","subscriptionProofIds":["$subProof"]}""",
                             )
-                        }.bodyAsText().asJson().data().str("id")
+                        }
+                        // Assert before reading `data`: on an error envelope `data` is null, and
+                        // the resulting JsonNull cast would mask the real status.
+                        res.status shouldBe HttpStatusCode.Created
+                        return res.bodyAsText().asJson().data().str("id")
+                    }
 
                     createAccount("arc-$s-active")
                     val inactiveId = createAccount("arc-$s-inactive")

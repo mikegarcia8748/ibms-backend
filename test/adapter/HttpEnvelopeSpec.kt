@@ -84,4 +84,55 @@ class HttpEnvelopeSpec : BehaviorSpec({
             }
         }
     }
+
+    Given("a request body the server cannot make sense of") {
+        // Both of these used to answer 500: StatusPages registered a catch-all
+        // `exception<Throwable>`, which swallowed Ktor's BadRequestException before it
+        // could reach the plugin's default 400, and `Money` is a String on the wire, so a
+        // non-numeric amount survives deserialization and blew up inside BigDecimal.
+        When("the JSON is syntactically malformed") {
+            Then("it returns an enveloped 400, not a 500") {
+                testApplication {
+                    application { testModule() }
+                    val token = signIn(UserRole.SECRETARY).token
+
+                    val res = client.post("/accounts") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                        contentType(ContentType.Application.Json)
+                        // Object closed one field early; the rest is trailing garbage.
+                        setBody("""{"accountNumber":"MB-1"},"rate":"1000"}""")
+                    }
+                    res.status shouldBe HttpStatusCode.BadRequest
+                    val body = res.bodyAsText().asJson()
+                    body["result"]!!.jsonPrimitive.content shouldBe "error"
+                    body["status"]!!.jsonPrimitive.content shouldBe "400"
+                    body["data"] shouldBe JsonNull
+                }
+            }
+        }
+
+        When("a money field is not a decimal number") {
+            Then("it returns an enveloped 400, not a 500") {
+                testApplication {
+                    application { testModule() }
+                    val token = signIn(UserRole.SECRETARY).token
+
+                    // `rate` is validated before the proof and the provider/store lookups,
+                    // so the placeholder ids below are never reached.
+                    val nil = "00000000-0000-0000-0000-000000000000"
+                    val res = client.post("/accounts") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                        contentType(ContentType.Application.Json)
+                        setBody(
+                            """{"accountNumber":"MB-2","providerId":"$nil","storeId":"$nil","rate":"abc","installationDate":"2025-01-01"}""",
+                        )
+                    }
+                    res.status shouldBe HttpStatusCode.BadRequest
+                    val body = res.bodyAsText().asJson()
+                    body["result"]!!.jsonPrimitive.content shouldBe "error"
+                    body["status"]!!.jsonPrimitive.content shouldBe "400"
+                }
+            }
+        }
+    }
 })

@@ -24,8 +24,10 @@ class AccountChangeRequestSpec : BehaviorSpec({
     fun String.asJson(): JsonObject = Json.parseToJsonElement(this).jsonObject
     fun JsonObject.data(): JsonObject = this["data"]!!.jsonObject
     fun JsonObject.str(key: String): String = this[key]!!.jsonPrimitive.content
+    // `contentOrNull`, not `content`: JsonNull IS a JsonPrimitive, so `content` would
+    // return the literal string "null" for a JSON null rather than Kotlin null.
     fun JsonObject.strOrNull(key: String): String? =
-        (this[key] as? JsonPrimitive)?.content
+        (this[key] as? JsonPrimitive)?.contentOrNull
 
     data class AccountSetup(
         val accountId: String,
@@ -101,7 +103,7 @@ class AccountChangeRequestSpec : BehaviorSpec({
             header(HttpHeaders.Authorization, "Bearer $token")
             contentType(ContentType.Application.Json)
             setBody(
-                """{"accountNumber":"$accountNumber","providerId":"$providerId","storeId":"$storeId","rate":"1500.00","installationDate":"2025-02-01","circuitId":"CIR-001"},"subscriptionProofIds":["$subProof"]}""",
+                """{"accountNumber":"$accountNumber","providerId":"$providerId","storeId":"$storeId","rate":"1500.00","installationDate":"2025-02-01","circuitId":"CIR-001","subscriptionProofIds":["$subProof"]}""",
             )
         }
         acc.status shouldBe HttpStatusCode.Created

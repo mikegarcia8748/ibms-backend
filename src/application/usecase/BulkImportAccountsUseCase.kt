@@ -18,6 +18,7 @@ import com.puregoldbe.ibms.domain.port.StoreRepository
 import com.puregoldbe.ibms.domain.port.TransactionRunner
 import com.puregoldbe.ibms.domain.service.InvoiceNumberFormatter
 import com.puregoldbe.ibms.domain.valueobject.Money
+import java.math.BigDecimal
 import kotlinx.datetime.LocalDate
 import org.apache.poi.ss.usermodel.Cell
 import org.apache.poi.ss.usermodel.CellType
@@ -430,10 +431,9 @@ class BulkImportAccountsUseCase(
     private fun parsePositiveAmount(raw: String?): String? {
         val s = raw?.trim()?.replace(",", "")?.replace("₱", "")?.trim()?.takeIf { it.isNotBlank() }
             ?: return null
-        return try {
-            if (Money.isPositive(s)) s else null
-        } catch (e: NumberFormatException) {
-            null
-        }
+        // parseOrNull, not isPositive: an unparseable cell here is a row to skip, whereas
+        // Money.parse raises a DomainError.Validation that would fail the whole import.
+        val parsed = Money.parseOrNull(s) ?: return null
+        return if (parsed > BigDecimal.ZERO) s else null
     }
 }

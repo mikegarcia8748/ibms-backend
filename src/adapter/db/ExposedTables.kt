@@ -159,7 +159,7 @@ object BatchSequences : Table("batch_sequences") {
 }
 
 object TopSheets : UUIDTable("topsheets") {
-    val invoiceNumber        = text("invoice_number").nullable().uniqueIndex()
+    val invoiceNumber        = text("invoice_number").nullable()
     val batchNumber          = text("batch_number").nullable()
     val billingPeriod        = text("billing_period")
     val providerId           = reference("provider_id", Providers).nullable()
@@ -176,6 +176,12 @@ object TopSheets : UUIDTable("topsheets") {
     val compilationDate      = timestamp("compilation_date")
     val createdAt            = timestamp("created_at")
     val updatedAt            = timestamp("updated_at")
+
+    // Mirrors uq_topsheet_invoice_per_provider (V22): the acronym-based invoice number
+    // is unique per provider, not globally — distinct providers may share an acronym.
+    init {
+        uniqueIndex("uq_topsheet_invoice_per_provider", providerId, invoiceNumber)
+    }
 }
 
 object TopSheetDetails : UUIDTable("topsheet_details") {

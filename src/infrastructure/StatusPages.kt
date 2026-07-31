@@ -4,6 +4,7 @@ import com.puregoldbe.ibms.domain.error.DomainError
 import com.puregoldbe.ibms.domain.model.ErrorEnvelope
 import io.ktor.http.*
 import io.ktor.server.application.*
+import io.ktor.server.plugins.BadRequestException
 import io.ktor.server.plugins.statuspages.*
 import io.ktor.server.response.*
 import org.jetbrains.exposed.v1.exceptions.ExposedSQLException
@@ -49,6 +50,17 @@ fun Application.configureStatusPages() {
                     ErrorEnvelope("error", "500", "internal server error", null),
                 )
             }
+        }
+        // A body kotlinx-serialization rejects — malformed JSON, a missing required field, an
+        // unknown enum value — arrives as BadRequestException. Without this handler Ktor resolves
+        // the nearest registered supertype, hits the catch-all below and answers 500; it never
+        // reaches the plugin's own defaultExceptionStatusCode. The message stays generic on
+        // purpose: the parser exception names internal DTO classes.
+        exception<BadRequestException> { call, _ ->
+            call.respond(
+                HttpStatusCode.BadRequest,
+                ErrorEnvelope("error", "400", "malformed or invalid request body", null),
+            )
         }
         exception<Throwable> { call, cause ->
             call.application.log.error("Unhandled error", cause)
