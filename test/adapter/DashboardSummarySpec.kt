@@ -7,6 +7,7 @@ import com.puregoldbe.ibms.domain.model.UserRole
 import com.puregoldbe.ibms.support.PostgresTestDb
 import com.puregoldbe.ibms.support.signIn
 import com.puregoldbe.ibms.support.testModule
+import com.puregoldbe.ibms.support.uploadPdfProof
 import io.kotest.core.spec.style.BehaviorSpec
 import io.kotest.matchers.shouldBe
 import io.ktor.client.request.*
@@ -77,14 +78,20 @@ class DashboardSummarySpec : BehaviorSpec({
                         )
                     }.bodyAsText().asJson().data().str("id")
 
-                    suspend fun createAccount(num: String, rate: String): String =
-                        client.post("/accounts") {
+                    suspend fun createAccount(num: String, rate: String): String {
+                        val subProof = uploadPdfProof(adminToken, "subscription_proof")
+                        val res = client.post("/accounts") {
                             header(HttpHeaders.Authorization, "Bearer $adminToken")
                             contentType(ContentType.Application.Json)
                             setBody(
-                                """{"accountNumber":"$num","providerId":"$providerId","storeId":"$storeId","rate":"$rate","installationDate":"2020-01-01"}""",
+                                """{"accountNumber":"$num","providerId":"$providerId","storeId":"$storeId","rate":"$rate","installationDate":"2020-01-01","subscriptionProofIds":["$subProof"]}""",
                             )
-                        }.bodyAsText().asJson().data().str("id")
+                        }
+                        // Assert before reading `data`: on an error envelope `data` is null, and
+                        // the resulting JsonNull cast would mask the real status.
+                        res.status shouldBe HttpStatusCode.Created
+                        return res.bodyAsText().asJson().data().str("id")
+                    }
 
                     createAccount("sum-$s-1", "1000")
                     createAccount("sum-$s-2", "2000")

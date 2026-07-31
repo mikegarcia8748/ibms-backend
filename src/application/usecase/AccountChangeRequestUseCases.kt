@@ -75,12 +75,13 @@ class SubmitAccountChangeRequestUseCase(
         }
 
         if (input.rate != null) {
-            try {
-                if (!Money.isPositive(input.rate)) {
-                    throw DomainError.Validation("rate must be greater than zero")
-                }
-            } catch (e: NumberFormatException) {
+            // Check parseability first for the field-specific message; Money.isPositive would
+            // otherwise raise its own generic DomainError.Validation.
+            if (Money.parseOrNull(input.rate) == null) {
                 throw DomainError.Validation("rate must be a valid decimal number")
+            }
+            if (!Money.isPositive(input.rate)) {
+                throw DomainError.Validation("rate must be greater than zero")
             }
         }
 

@@ -1,5 +1,6 @@
 package com.puregoldbe.ibms.domain.valueobject
 
+import com.puregoldbe.ibms.domain.error.DomainError
 import java.math.BigDecimal
 import java.math.RoundingMode
 
@@ -13,8 +14,24 @@ import java.math.RoundingMode
 object Money {
     const val SCALE = 2
 
+    /**
+     * Wire string -> scaled BigDecimal.
+     *
+     * Because money is a `String` on the wire, an unparseable amount survives
+     * deserialization untouched and only fails here. Raise a [DomainError.Validation]
+     * (-> 400) rather than letting BigDecimal's `NumberFormatException` escape to
+     * StatusPages, which answers 500 to what is plainly a bad request.
+     */
     fun parse(wire: String?): BigDecimal =
-        BigDecimal((wire ?: "0").trim().ifBlank { "0" }).setScale(SCALE, RoundingMode.HALF_UP)
+        parseOrNull(wire) ?: throw DomainError.Validation("amount must be a valid decimal number")
+
+    /** As [parse], but null instead of throwing — for callers with a field-specific message. */
+    fun parseOrNull(wire: String?): BigDecimal? =
+        try {
+            BigDecimal((wire ?: "0").trim().ifBlank { "0" }).setScale(SCALE, RoundingMode.HALF_UP)
+        } catch (_: NumberFormatException) {
+            null
+        }
 
     fun format(value: BigDecimal): String =
         value.setScale(SCALE, RoundingMode.HALF_UP).toPlainString()
@@ -24,6 +41,9 @@ object Money {
 
 /** Wire-string -> scaled BigDecimal. */
 fun String?.toMoney(): BigDecimal = Money.parse(this)
+
+/** Wire-string -> scaled BigDecimal, or null when unparseable. */
+fun String?.toMoneyOrNull(): BigDecimal? = Money.parseOrNull(this)
 
 /** Scaled BigDecimal -> wire string. */
 fun BigDecimal.toMoneyString(): String = Money.format(this)
