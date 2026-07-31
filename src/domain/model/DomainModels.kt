@@ -115,6 +115,12 @@ data class UserProfile(
     val id: String,
     val username: String,
     val name: String,
+    /**
+     * Where notification email is delivered. `null` (omitted on the wire) means this
+     * user receives **no** notifications regardless of what they are subscribed to —
+     * recipient resolution requires a non-null address.
+     */
+    val email: String? = null,
     val firstName: String? = null,
     val middleInitial: String? = null,
     val lastName: String? = null,
@@ -314,6 +320,12 @@ data class RefreshRequest(val refreshToken: String)
 data class ProvisionUserRequest(
     val username: String,
     val name: String,
+    /**
+     * Notification delivery address. Optional, but a user provisioned without one
+     * cannot receive any notification email until it is set via
+     * `PATCH /users/{id}/email`.
+     */
+    val email: String? = null,
     val firstName: String? = null,
     val middleInitial: String? = null,
     val lastName: String? = null,
