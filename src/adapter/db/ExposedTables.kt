@@ -294,12 +294,24 @@ object EmailLog : UUIDTable("email_log") {
     val sentAt           = timestamp("sent_at").nullable()
 }
 
-/** Per-user notification subscriptions (V19); one row per (user, event) the user opts into. */
+/** Per-user notification subscriptions (V20); one row per (user, event) the user opts into. */
 object UserNotificationSubscriptions : Table("user_notification_subscriptions") {
     val userId    = reference("user_id", Users)
     val eventType = text("event_type")
     val createdAt = timestamp("created_at")
     override val primaryKey = PrimaryKey(userId, eventType)
+}
+
+/**
+ * Per-role default subscriptions (V21), seeded into [UserNotificationSubscriptions]
+ * when a user is provisioned. A template only — editing these never retrofits
+ * existing users.
+ */
+object NotificationRoleDefaults : Table("notification_role_defaults") {
+    val role      = pgEnum<UserRole>("role", "user_role")
+    val eventType = text("event_type")
+    val createdAt = timestamp("created_at")
+    override val primaryKey = PrimaryKey(role, eventType)
 }
 
 object AccountChangeRequests : UUIDTable("account_change_requests") {

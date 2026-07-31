@@ -6,6 +6,7 @@ import com.puregoldbe.ibms.domain.model.AccountChangeRequestStatus
 import com.puregoldbe.ibms.domain.model.AccountStatus
 import com.puregoldbe.ibms.domain.model.ApiResponse
 import com.puregoldbe.ibms.domain.model.AttachmentPurpose
+import com.puregoldbe.ibms.domain.model.NotificationEvent
 import com.puregoldbe.ibms.domain.model.ProviderStatus
 import com.puregoldbe.ibms.domain.model.StoreStatus
 import com.puregoldbe.ibms.domain.model.TopSheetStatus
@@ -48,6 +49,14 @@ private inline fun <reified T : Enum<T>> parseEnum(raw: String?): T? =
     raw?.takeIf { it.isNotBlank() }?.let { value ->
         runCatching { enumValueOf<T>(value.uppercase()) }.getOrNull()
     }
+
+/**
+ * Event keys are validated strictly (unlike the lenient status/role *filters* above):
+ * a typo'd key in a write body is a client bug, and silently ignoring it would leave
+ * the admin believing a subscription was saved.
+ */
+internal fun parseNotificationEvent(raw: String): NotificationEvent =
+    NotificationEvent.fromKey(raw) ?: throw DomainError.Validation("unknown notification event '$raw'")
 
 internal fun parseUserRole(raw: String?): UserRole? = parseEnum<UserRole>(raw)
 internal fun parseUserStatus(raw: String?): UserStatus? = parseEnum<UserStatus>(raw)

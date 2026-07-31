@@ -114,6 +114,7 @@ fun Application.moduleWith(cfg: AppConfig) {
     val changeRequests = ExposedAccountChangeRequestRepository()
     val emailLog = ExposedEmailLogRepository()
     val notificationSubs = ExposedNotificationSubscriptionRepository()
+    val notificationRoleDefaults = ExposedNotificationRoleDefaultsRepository()
 
     // --- Use cases ---
     // Every path that ends in "signed in" mints its tokens through one issuer, so
@@ -130,7 +131,7 @@ fun Application.moduleWith(cfg: AppConfig) {
     val logoutEverywhere = LogoutEverywhereUseCase(sessions, clock, tx)
     val getCurrentUser = GetCurrentUserUseCase(users, tx)
     val listUsers = ListUsersUseCase(users, tx)
-    val provisionUser = ProvisionUserUseCase(users, passwordHasher, secrets, sessionPolicy, clock, tx)
+    val provisionUser = ProvisionUserUseCase(users, notificationSubs, notificationRoleDefaults, passwordHasher, secrets, sessionPolicy, clock, tx)
     val resetUserPassword =
         ResetUserPasswordUseCase(users, sessions, passwordHasher, secrets, sessionPolicy, clock, tx)
     val updateUserRole = UpdateUserRoleUseCase(users, tx)
@@ -192,8 +193,14 @@ fun Application.moduleWith(cfg: AppConfig) {
     val dashboardSummary = GetDashboardSummaryUseCase(accounts, tx)
     val listDashboardAccounts = ListDashboardAccountsUseCase(accounts, tx)
     val listBillingHistory = ListBillingHistoryUseCase(topsheets, tx)
+    val updateUserEmail = UpdateUserEmailUseCase(users, tx)
     val getUserNotificationSubscriptions = GetUserNotificationSubscriptionsUseCase(users, notificationSubs, tx)
     val updateUserNotificationSubscriptions = UpdateUserNotificationSubscriptionsUseCase(users, notificationSubs, tx)
+    val countDeliverableSubscribers = CountDeliverableSubscribersUseCase(notificationSubs, tx)
+    val listUserSubscriptions = ListUserNotificationSubscriptionsUseCase(notificationSubs, tx)
+    val bulkUpdateSubscriptions = BulkUpdateNotificationSubscriptionsUseCase(users, notificationSubs, tx)
+    val getNotificationRoleDefaults = GetNotificationRoleDefaultsUseCase(notificationRoleDefaults, tx)
+    val updateNotificationRoleDefaults = UpdateNotificationRoleDefaultsUseCase(notificationRoleDefaults, tx)
     val dispatchEmails = DispatchQueuedEmailsUseCase(emailLog, emailGateway, clock, tx)
 
     // --- Cross-cutting plugins ---
@@ -234,7 +241,11 @@ fun Application.moduleWith(cfg: AppConfig) {
             securedAuthRoutes(getCurrentUser, changeOwnPassword, logout, logoutEverywhere)
             userRoutes(
                 getCurrentUser, listUsers, provisionUser, resetUserPassword, updateUserRole, updateUserStatus,
-                getUserNotificationSubscriptions, updateUserNotificationSubscriptions,
+                updateUserEmail, getUserNotificationSubscriptions, updateUserNotificationSubscriptions,
+            )
+            notificationAdminRoutes(
+                countDeliverableSubscribers, listUserSubscriptions, bulkUpdateSubscriptions,
+                getNotificationRoleDefaults, updateNotificationRoleDefaults,
             )
             providerRoutes(listProviders, createProvider, updateProvider, deactivateProvider)
             storeRoutes(listStores, getStore, createStore, updateStore, closeStore, getFloating)

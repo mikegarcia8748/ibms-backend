@@ -8,11 +8,14 @@ import com.puregoldbe.ibms.domain.model.UserProfile
 import com.puregoldbe.ibms.domain.model.UserRole
 import com.puregoldbe.ibms.domain.model.UserStatus
 import com.puregoldbe.ibms.domain.port.Clock
+import com.puregoldbe.ibms.domain.port.NotificationRoleDefaultsRepository
+import com.puregoldbe.ibms.domain.port.NotificationSubscriptionRepository
 import com.puregoldbe.ibms.domain.port.PasswordHasher
 import com.puregoldbe.ibms.domain.port.SecretGenerator
 import com.puregoldbe.ibms.domain.port.SessionRepository
 import com.puregoldbe.ibms.domain.port.TransactionRunner
 import com.puregoldbe.ibms.domain.port.UserRepository
+import com.puregoldbe.ibms.domain.service.EmailAddressPolicy
 import com.puregoldbe.ibms.domain.service.SessionPolicy
 import com.puregoldbe.ibms.domain.service.UsernamePolicy
 
@@ -36,9 +39,15 @@ class ListUsersUseCase(
  * The temporary password is generated here and returned to the admin exactly
  * once — only its bcrypt hash is persisted, so a lost temporary password can be
  * replaced (see [ResetUserPasswordUseCase]) but never recovered.
+ *
+ * The new account's notification subscriptions are seeded from the per-role
+ * defaults in the same transaction, so a user is either created with their
+ * defaults or not created at all.
  */
 class ProvisionUserUseCase(
     private val users: UserRepository,
+    private val subscriptions: NotificationSubscriptionRepository,
+    private val roleDefaults: NotificationRoleDefaultsRepository,
     private val hasher: PasswordHasher,
     private val secrets: SecretGenerator,
     private val policy: SessionPolicy,
@@ -53,17 +62,40 @@ class ProvisionUserUseCase(
         if (users.existsByUsername(username)) {
             throw DomainError.Conflict("username '$username' is already taken", code = "username_taken")
         }
+        val email = EmailAddressPolicy.normalizeOrNull(request.email)
 
         val now = clock.now()
         val temporaryPassword = secrets.temporaryPassword()
         val expiresAt = now + policy.temporaryPasswordTtl
         val user = users.create(
-            input = request.copy(username = username),
+            input = request.copy(username = username, email = email),
             passwordHash = hasher.hash(temporaryPassword),
             tempPasswordExpiresAt = expiresAt,
             at = now,
         )
+        roleDefaults.forRole(user.role)
+            .takeIf { it.isNotEmpty() }
+            ?.let { subscriptions.setForUser(user.id, it) }
         ProvisionedUser(user, temporaryPassword, expiresAt)
+    }
+}
+
+/**
+ * Set or clear a user's notification delivery address (sysadmin only, enforced at
+ * the controller).
+ *
+ * This is the only way an address ever gets onto a user record, and without one a
+ * user receives no notification email whatever they are subscribed to — recipient
+ * resolution requires a non-null address.
+ */
+class UpdateUserEmailUseCase(
+    private val users: UserRepository,
+    private val tx: TransactionRunner,
+) {
+    suspend operator fun invoke(userId: String, email: String?): UserProfile = tx.inTransaction {
+        users.findById(userId) ?: throw DomainError.NotFound("user $userId not found")
+        val normalized = EmailAddressPolicy.normalizeOrNull(email)
+        users.updateEmail(userId, normalized) ?: throw DomainError.NotFound("user $userId not found")
     }
 }
 
