@@ -24,9 +24,9 @@ private fun paidTopsheet(cheque: String?) = TopSheet(
     compilationDate = Instant.fromEpochSeconds(0),
 )
 
-private fun line(id: String, prorated: String, store: String?) = TopSheetDetail(
+private fun line(id: String, prorated: String, store: String?, arrears: String = "0.00") = TopSheetDetail(
     id = id, topsheetId = "ts1", accountId = "a-$id", billingPeriod = "2026-07",
-    proratedAmount = prorated, fullAmount = prorated, branchCode = "BR-$id",
+    proratedAmount = prorated, fullAmount = prorated, arrearsAmount = arrears, branchCode = "BR-$id",
     storeName = store, circuitId = "CID-$id", accountNumber = "ACC-$id",
 )
 
@@ -51,8 +51,28 @@ class ExportChequePaymentCsvUseCaseSpec : BehaviorSpec({
             Then("it carries the cheque meta block, header row, and a correct grand total") {
                 export.fileName shouldBe "Cheque_CONV-202607-0001_2026-07.csv"
                 text shouldContain "Cheque Number,CHQ-0001"
-                text shouldContain "NO.,STORE CO,STORE NAME,CID#,ACCT#,MRC,INVOICE NUMBER"
-                text shouldContain "GRAND TOTAL,,,,,2000.00,"
+                text shouldContain "NO.,STORE CO,STORE NAME,CID#,ACCT#,MRC,ARREARS,INVOICE NUMBER"
+                text shouldContain "GRAND TOTAL,,,,,2000.00,0.00,2000.00"
+            }
+        }
+    }
+
+    // The voucher documents what the cheque actually paid, so its GRAND TOTAL must
+    // reconcile with TopSheet.totalAmount (= Σ proratedAmount + Σ arrearsAmount).
+    // Summing proratedAmount alone understated any topsheet carrying arrears.
+    Given("a PAID topsheet whose lines carry arrears") {
+        every { topsheets.findById("ts1") } returns paidTopsheet("CHQ-0001")
+        every { topsheets.findLines("ts1") } returns listOf(
+            line("1", "1200.00", "SM North", arrears = "500.00"),
+            line("2", "800.00", "SM South", arrears = "0.00"),
+        )
+
+        When("exporting the CSV") {
+            val text = useCase("ts1").bytes.decodeToString()
+
+            Then("the arrears column and the combined grand total are carried") {
+                text shouldContain "BR-1,SM North,CID-1,ACC-1,1200.00,500.00,CONV-202607-0001"
+                text shouldContain "GRAND TOTAL,,,,,2000.00,500.00,2500.00"
             }
         }
     }
