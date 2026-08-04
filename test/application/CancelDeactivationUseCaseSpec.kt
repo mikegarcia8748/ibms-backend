@@ -112,10 +112,23 @@ class CancelDeactivationUseCaseSpec : BehaviorSpec({
 
         When("cancelling") {
             useCase("acc-1", "Customer retained", "actor-1")
-            Then("activity is recorded with action account.deactivation_cancelled") {
+            Then("activity is recorded with action account.deactivation_cancelled and the reason") {
                 verify(exactly = 1) {
-                    activity.record("actor-1", "account.deactivation_cancelled", "account", "acc-1")
+                    activity.record("actor-1", "account.deactivation_cancelled", "account", "acc-1", "Customer retained")
                 }
+            }
+        }
+    }
+
+    Given("a termination-requested account with a blank reason") {
+        every { accounts.findById("acc-1") } returns terminationRequestedAccount()
+
+        When("cancelling with a blank reason") {
+            Then("throws Validation and does not cancel") {
+                shouldThrow<DomainError.Validation> {
+                    useCase("acc-1", "   ", "actor-1")
+                }
+                verify(exactly = 0) { accounts.cancelTerminationRequested(any()) }
             }
         }
     }

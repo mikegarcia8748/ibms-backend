@@ -131,9 +131,13 @@ Bearer token. Allowed roles: **secretary**, **finance** (and `sysadmin`).
 | 4 | CID# | `circuitId` |
 | 5 | ACCT# | `accountNumber` |
 | 6 | MRC | `proratedAmount` |
-| 7 | INVOICE NUMBER | topsheet `invoiceNumber` |
+| 7 | ARREARS | `arrearsAmount` |
+| 8 | INVOICE NUMBER | topsheet `invoiceNumber` |
 
-`GRAND TOTAL` = sum of every line's `proratedAmount`.
+The `GRAND TOTAL` row breaks the total out across the last three columns: the MRC
+subtotal (Σ `proratedAmount`) under **MRC**, the arrears subtotal (Σ `arrearsAmount`)
+under **ARREARS**, and their sum under **INVOICE NUMBER**. That combined figure equals
+the topsheet's `totalAmount` — the amount the cheque actually paid.
 
 ### Success — `200 OK`
 
@@ -164,13 +168,15 @@ Total Accounts,43
 Cheque Number,CHQ-0001
 Payment Date,2026-07-27T06:15:00Z
 
-NO.,STORE CO,STORE NAME,CID#,ACCT#,MRC,INVOICE NUMBER
-1,118,PUREGOLD QI CENTRAL,IC-AWZ-2200,71214756,5598.00,CONV-202607-0012
-2,050,PUREGOLD JR ANTIPOLO,,88123456,2798.00,CONV-202607-0012
-GRAND TOTAL,,,,,8396.00,
+NO.,STORE CO,STORE NAME,CID#,ACCT#,MRC,ARREARS,INVOICE NUMBER
+1,118,PUREGOLD QI CENTRAL,IC-AWZ-2200,71214756,5598.00,500.00,CONV-202607-0012
+2,050,PUREGOLD JR ANTIPOLO,,88123456,2798.00,0.00,CONV-202607-0012
+GRAND TOTAL,,,,,8396.00,500.00,8896.00
 ```
 
 A metadata block (including `Cheque Number` and `Payment Date`) is followed by a blank line, the header row, one row per line, and a `GRAND TOTAL` row. Fields containing a comma, quote, or newline are wrapped in double quotes with inner quotes doubled.
+
+The `GRAND TOTAL` row carries the MRC subtotal, the arrears subtotal, and their sum in the last three columns; the sum equals the topsheet's `totalAmount`.
 
 ### Success — `200 OK`
 

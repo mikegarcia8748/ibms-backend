@@ -12,6 +12,10 @@ import java.math.BigDecimal
  * a meta block (incl. the cheque number), a blank separator line, the account line
  * table, and a GRAND TOTAL. Hand-rolled with RFC-4180 escaping (no CSV library).
  * Guards that the cheque number is present, same as the PDF.
+ *
+ * Carries the MRC and ARREARS subtotals separately so the combined GRAND TOTAL
+ * reconciles with `TopSheet.totalAmount` (= Σ proratedAmount + Σ arrearsAmount) —
+ * the amount the cheque actually paid. Mirrors [ExportTopSheetExcelUseCase].
  */
 class ExportChequePaymentCsvUseCase(
     private val topsheets: TopSheetRepository,
@@ -54,19 +58,25 @@ class ExportChequePaymentCsvUseCase(
         sb.append("Payment Date,").append(q(ts.paidAt?.toString())).append(nl)
         sb.append(nl) // blank separator line
 
-        sb.append("NO.,STORE CO,STORE NAME,CID#,ACCT#,MRC,INVOICE NUMBER").append(nl)
-        var total = BigDecimal.ZERO
+        sb.append("NO.,STORE CO,STORE NAME,CID#,ACCT#,MRC,ARREARS,INVOICE NUMBER").append(nl)
+        var mrcTotal = BigDecimal.ZERO
+        var arrearsTotal = BigDecimal.ZERO
         lines.forEachIndexed { i, l ->
-            total += BigDecimal(l.proratedAmount)
+            mrcTotal += BigDecimal(l.proratedAmount)
+            arrearsTotal += BigDecimal(l.arrearsAmount)
             sb.append(i + 1).append(',')
                 .append(q(l.branchCode)).append(',')
                 .append(q(l.storeName)).append(',')
                 .append(q(l.circuitId)).append(',')
                 .append(q(l.accountNumber)).append(',')
                 .append(q(l.proratedAmount)).append(',')
+                .append(q(l.arrearsAmount)).append(',')
                 .append(q(ts.invoiceNumber)).append(nl)
         }
-        sb.append("GRAND TOTAL,,,,,").append(total.toPlainString()).append(',').append(nl)
+        sb.append("GRAND TOTAL,,,,,")
+            .append(mrcTotal.toPlainString()).append(',')
+            .append(arrearsTotal.toPlainString()).append(',')
+            .append((mrcTotal + arrearsTotal).toPlainString()).append(nl)
 
         return sb.toString().toByteArray(Charsets.UTF_8)
     }

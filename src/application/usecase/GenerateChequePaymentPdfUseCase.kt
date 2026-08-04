@@ -23,6 +23,10 @@ import java.math.BigDecimal
  * line table, and a GRAND TOTAL) and surfaces the cheque number used to pay the
  * accounts. Guards that the cheque number is present so the document is only
  * produced for a genuinely-closed topsheet.
+ *
+ * Carries the MRC and ARREARS subtotals separately so the combined GRAND TOTAL
+ * reconciles with `TopSheet.totalAmount` (= Σ proratedAmount + Σ arrearsAmount) —
+ * the amount the cheque actually paid.
  */
 class GenerateChequePaymentPdfUseCase(
     private val topsheets: TopSheetRepository,
@@ -76,24 +80,27 @@ class GenerateChequePaymentPdfUseCase(
         meta("By:", "Mary Ann Agustin")
         doc.add(Paragraph(" "))
 
-        val headers = listOf("NO.", "STORE CO", "STORE NAME", "CID#", "ACCT#", "MRC", "INVOICE NUMBER")
+        val headers = listOf("NO.", "STORE CO", "STORE NAME", "CID#", "ACCT#", "MRC", "ARREARS", "INVOICE NUMBER")
         val table = PdfPTable(headers.size).apply {
             widthPercentage = 100f
-            setWidths(floatArrayOf(4f, 10f, 22f, 10f, 12f, 12f, 18f))
+            setWidths(floatArrayOf(4f, 10f, 20f, 10f, 12f, 11f, 11f, 16f))
         }
         headers.forEach { h ->
             table.addCell(PdfPCell(Phrase(h, label)).apply { horizontalAlignment = Element.ALIGN_CENTER })
         }
 
-        var total = BigDecimal.ZERO
+        var mrcTotal = BigDecimal.ZERO
+        var arrearsTotal = BigDecimal.ZERO
         lines.forEachIndexed { i, line ->
-            total += BigDecimal(line.proratedAmount)
+            mrcTotal += BigDecimal(line.proratedAmount)
+            arrearsTotal += BigDecimal(line.arrearsAmount)
             table.addCell(PdfPCell(Phrase((i + 1).toString(), normal)))
             table.addCell(PdfPCell(Phrase(line.branchCode ?: "", normal)))
             table.addCell(PdfPCell(Phrase(line.storeName ?: "", normal)))
             table.addCell(PdfPCell(Phrase(line.circuitId ?: "", normal)))
             table.addCell(PdfPCell(Phrase(line.accountNumber ?: "", normal)))
             table.addCell(PdfPCell(Phrase(line.proratedAmount, normal)).apply { horizontalAlignment = Element.ALIGN_RIGHT })
+            table.addCell(PdfPCell(Phrase(line.arrearsAmount, normal)).apply { horizontalAlignment = Element.ALIGN_RIGHT })
             table.addCell(PdfPCell(Phrase(ts.invoiceNumber ?: "", normal)))
         }
 
@@ -103,8 +110,12 @@ class GenerateChequePaymentPdfUseCase(
                 horizontalAlignment = Element.ALIGN_RIGHT
             },
         )
-        table.addCell(PdfPCell(Phrase(total.toPlainString(), label)).apply { horizontalAlignment = Element.ALIGN_RIGHT })
-        table.addCell(PdfPCell(Phrase("", normal)))
+        table.addCell(PdfPCell(Phrase(mrcTotal.toPlainString(), label)).apply { horizontalAlignment = Element.ALIGN_RIGHT })
+        table.addCell(PdfPCell(Phrase(arrearsTotal.toPlainString(), label)).apply { horizontalAlignment = Element.ALIGN_RIGHT })
+        table.addCell(
+            PdfPCell(Phrase((mrcTotal + arrearsTotal).toPlainString(), label))
+                .apply { horizontalAlignment = Element.ALIGN_RIGHT },
+        )
         doc.add(table)
 
         doc.close()
