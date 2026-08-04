@@ -22,6 +22,7 @@ import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.IsolationMode
 import io.kotest.core.spec.style.BehaviorSpec
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
@@ -106,7 +107,7 @@ class BulkImportAccountsUseCaseSpec : BehaviorSpec({
     every { providers.create(any(), any()) } answers { sampleProvider(firstArg()) }
     every { stores.findByBranchCode(any()) } returns null
     every { stores.create(capture(storeReq), any()) } answers { sampleStore(firstArg()) }
-    every { accounts.existsByProviderAndNumber(any(), any()) } returns false
+    every { accounts.existsByIdentity(any(), any(), any(), any()) } returns false
     every { accounts.create(capture(accountReq), any()) } answers { sampleAccount(firstArg()) }
 
     // ---- XLSX fixture builders ----
@@ -396,8 +397,8 @@ class BulkImportAccountsUseCaseSpec : BehaviorSpec({
         }
     }
 
-    Given("an account that already exists for the provider") {
-        every { accounts.existsByProviderAndNumber(any(), "ACC001") } returns true
+    Given("an account whose identity (store, provider, account no, circuit) already exists") {
+        every { accounts.existsByIdentity(any(), any(), "ACC001", any()) } returns true
         val bytes = xlsx(rows = listOf(row(accountNo = "ACC001")))
         When("importing") {
             val result = useCase(bytes, "actor")
@@ -589,7 +590,7 @@ class BulkImportAccountsUseCaseSpec : BehaviorSpec({
             useCase(bytes, "actor")
             Then("it is read without a trailing .0") {
                 accountReq.captured.accountNumber shouldBe "123456"
-                verify { accounts.existsByProviderAndNumber(any(), "123456") }
+                verify { accounts.existsByIdentity(any(), any(), "123456", any()) }
             }
         }
     }
@@ -601,31 +602,36 @@ class BulkImportAccountsUseCaseSpec : BehaviorSpec({
         val bytes = xlsx(rows = emptyList())
         When("importing") {
             val result = useCase(bytes, "actor")
-            Then("all counts are zero but the placeholder attachment is still created") {
+            // The import returns before phase 2, so a file with nothing to import
+            // leaves no placeholder attachment row behind.
+            Then("all counts are zero and no placeholder attachment is created") {
                 result.totalRows shouldBe 0
                 result.rowsSkipped shouldBe 0
                 result.storesCreated shouldBe 0
                 result.accountsCreated shouldBe 0
                 result.providers.size shouldBe 0
-                verify(exactly = 1) {
-                    attachments.create(
-                        AttachmentPurpose.INSTALLATION_PROOF, "store", null,
-                        "bulk-import/placeholder-installation-proof", null, null, "actor",
-                    )
+                verify(exactly = 0) {
+                    attachments.create(any(), any(), any(), any(), any(), any(), any())
                 }
             }
         }
     }
 
     // ======================================================================
-    //  I. Transaction / exception propagation
+    //  I. Transaction / per-row failure isolation
     // ======================================================================
+    // The import commits one transaction per row, so a row that throws rolls back
+    // on its own and is reported as failed — it must not abort the whole import.
     Given("a repository that fails mid-import") {
         every { accounts.create(any(), any()) } throws RuntimeException("db down")
         val bytes = xlsx(rows = listOf(row()))
         When("importing") {
-            Then("the exception propagates out of invoke (transaction would roll back)") {
-                shouldThrow<RuntimeException> { useCase(bytes, "actor") }
+            val result = useCase(bytes, "actor")
+            Then("the row is reported as failed and the import still returns a summary") {
+                result.rowsFailed shouldBe 1
+                result.accountsCreated shouldBe 0
+                result.failureReasons.size shouldBe 1
+                result.failureReasons.first() shouldContain "db down"
             }
         }
     }
