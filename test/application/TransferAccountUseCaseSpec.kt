@@ -5,14 +5,17 @@ import com.puregoldbe.ibms.domain.error.DomainError
 import com.puregoldbe.ibms.domain.model.Account
 import com.puregoldbe.ibms.domain.model.AccountStatus
 import com.puregoldbe.ibms.domain.model.AccountUpsertRequest
+import com.puregoldbe.ibms.domain.model.AttachmentPurpose
 import com.puregoldbe.ibms.domain.port.AccountRepository
 import com.puregoldbe.ibms.domain.port.ActivityRecorder
 import com.puregoldbe.ibms.domain.port.AttachmentRepository
+import com.puregoldbe.ibms.domain.port.NotificationEnqueuer
 import com.puregoldbe.ibms.domain.port.StoreRepository
 import com.puregoldbe.ibms.domain.port.TransferRepository
 import com.puregoldbe.ibms.support.FakeClock
 import com.puregoldbe.ibms.support.FakeIdempotencyKeyRepository
 import com.puregoldbe.ibms.support.ImmediateTransactionRunner
+import com.puregoldbe.ibms.support.uploadedPdfAttachment
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.IsolationMode
 import io.kotest.core.spec.style.BehaviorSpec
@@ -45,12 +48,15 @@ class TransferAccountUseCaseSpec : BehaviorSpec({
     val attachments = mockk<AttachmentRepository>(relaxed = true)
     val idempotency = FakeIdempotencyKeyRepository()
     val activity = mockk<ActivityRecorder>(relaxed = true)
+    val notifications = mockk<NotificationEnqueuer>(relaxed = true)
     val clock = FakeClock(Instant.parse("2026-08-01T00:00:00Z"))
-    val useCase = TransferAccountUseCase(accounts, stores, transfers, attachments, idempotency, activity, clock, ImmediateTransactionRunner())
+    val useCase = TransferAccountUseCase(
+        accounts, stores, transfers, attachments, idempotency, activity, notifications, clock, ImmediateTransactionRunner(),
+    )
 
     Given("an INACTIVE source account") {
         every { accounts.findById("acc-1") } returns account(status = AccountStatus.INACTIVE)
-        every { attachments.exists("proof-1") } returns true
+        every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1", AttachmentPurpose.TRANSFER_PROOF)
 
         When("transferring") {
             Then("throws Conflict and does not create a new account") {
@@ -62,7 +68,7 @@ class TransferAccountUseCaseSpec : BehaviorSpec({
 
     Given("a TERMINATION_REQUESTED source account") {
         every { accounts.findById("acc-1") } returns account(status = AccountStatus.TERMINATION_REQUESTED)
-        every { attachments.exists("proof-1") } returns true
+        every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1", AttachmentPurpose.TRANSFER_PROOF)
 
         When("transferring") {
             Then("throws Conflict") {
@@ -73,7 +79,7 @@ class TransferAccountUseCaseSpec : BehaviorSpec({
 
     Given("an already-TRANSFERRED source account") {
         every { accounts.findById("acc-1") } returns account(status = AccountStatus.TRANSFERRED)
-        every { attachments.exists("proof-1") } returns true
+        every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1", AttachmentPurpose.TRANSFER_PROOF)
 
         When("transferring") {
             Then("throws Conflict") {
@@ -96,7 +102,7 @@ class TransferAccountUseCaseSpec : BehaviorSpec({
 
     Given("a destination store that already holds the same identity") {
         every { accounts.findById("acc-1") } returns account(storeId = "s1")
-        every { attachments.exists("proof-1") } returns true
+        every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1", AttachmentPurpose.TRANSFER_PROOF)
         every { accounts.existsByIdentity("s2", "p1", "ACC-001", null) } returns true
 
         When("transferring") {
@@ -110,7 +116,7 @@ class TransferAccountUseCaseSpec : BehaviorSpec({
     Given("a prorated ACTIVE account transferred to a different store") {
         val slot = slot<AccountUpsertRequest>()
         every { accounts.findById("acc-1") } returns account(storeId = "s1", isProrated = true)
-        every { attachments.exists("proof-1") } returns true
+        every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1", AttachmentPurpose.TRANSFER_PROOF)
         every { accounts.existsByIdentity("s2", "p1", "ACC-001", null) } returns false
         every { accounts.create(capture(slot), any()) } returns account(id = "acc-2", storeId = "s2", isProrated = true)
 
