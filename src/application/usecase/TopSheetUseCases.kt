@@ -36,6 +36,7 @@ import com.puregoldbe.ibms.domain.service.InvoiceNumberFormatter
 import com.puregoldbe.ibms.domain.service.ProrationEngine
 import com.puregoldbe.ibms.domain.valueobject.BillingPeriod
 import com.puregoldbe.ibms.domain.valueobject.toMoney
+import com.puregoldbe.ibms.domain.valueobject.toMoneyOrNull
 import com.puregoldbe.ibms.domain.valueobject.toMoneyString
 import kotlinx.datetime.toLocalDateTime
 import java.math.BigDecimal
@@ -340,11 +341,8 @@ class UpdateDraftLineUseCase(
         if (proratedAmount == null || proratedAmount.isBlank()) {
             throw DomainError.Validation("proratedAmount must be a valid decimal amount")
         }
-        val parsed = try {
-            proratedAmount.toMoney()
-        } catch (e: NumberFormatException) {
-            throw DomainError.Validation("proratedAmount must be a valid decimal amount")
-        }
+        val parsed = proratedAmount.toMoneyOrNull()
+            ?: throw DomainError.Validation("proratedAmount must be a valid decimal amount")
         if (parsed <= BigDecimal.ZERO) {
             throw DomainError.Validation("proratedAmount must be greater than zero")
         }

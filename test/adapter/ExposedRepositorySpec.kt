@@ -89,7 +89,9 @@ class ExposedRepositorySpec : BehaviorSpec({
                     store.status shouldBe StoreStatus.ACTIVE
                     stores.existsByBranchCode("PG-001") shouldBe true
 
-                    val provider = providers.create("Converge", paymentScheduleDay = 15)
+                    // Unique name: providers.name is globally UNIQUE and the suite shares one
+                    // non-truncated Postgres, so a bare "Converge" collides with BulkImportSpec.
+                    val provider = providers.create("Converge-${System.nanoTime()}", paymentScheduleDay = 15)
                     sequences.seed(provider.id, "CONV-")
                     sequences.nextValue(provider.id) shouldBe 1
                     sequences.nextValue(provider.id) shouldBe 2

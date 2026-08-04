@@ -63,7 +63,7 @@ class ExposedUserRepository : UserRepository {
     ): UserProfile {
         val newId = Users.insertAndGetId {
             it[Users.username] = input.username
-            it[Users.email] = null
+            it[Users.email] = input.email
             it[Users.name] = input.name
             it[Users.firstName] = input.firstName
             it[Users.middleInitial] = input.middleInitial
@@ -92,6 +92,15 @@ class ExposedUserRepository : UserRepository {
         val uuid = id.toUuidOrNull() ?: return null
         val updated = Users.update({ Users.id eq uuid }) {
             it[Users.status] = status
+            it[Users.updatedAt] = java.time.Instant.now()
+        }
+        return if (updated == 0) null else findById(id)
+    }
+
+    override fun updateEmail(id: String, email: String?): UserProfile? {
+        val uuid = id.toUuidOrNull() ?: return null
+        val updated = Users.update({ Users.id eq uuid }) {
+            it[Users.email] = email
             it[Users.updatedAt] = java.time.Instant.now()
         }
         return if (updated == 0) null else findById(id)
@@ -147,6 +156,7 @@ class ExposedUserRepository : UserRepository {
         id = this[Users.id].value.toString(),
         username = this[Users.username],
         name = this[Users.name],
+        email = this[Users.email],
         firstName = this[Users.firstName],
         middleInitial = this[Users.middleInitial],
         lastName = this[Users.lastName],

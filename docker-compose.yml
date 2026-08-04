@@ -26,8 +26,15 @@ services:
       db:
         condition: service_healthy
     ports:
-      - "${APP_PORT:-8080}:8080"
+      # Host-side mapping only. APP_PORT below is the port the process binds.
+      - "${APP_HOST_PORT:-8080}:8080"
     environment:
+      # This compose file is for local/dev use, so it opts into the relaxed rules.
+      # A real deployment sets APP_ENV=prod and must then supply a strong JWT_SECRET,
+      # a real DB_PASSWORD, an explicit CORS_ALLOWED_HOSTS and an https APP_URL, or
+      # the app refuses to start.
+      APP_ENV: ${APP_ENV:-dev}
+      APP_PORT: 8080
       # `db` is the service's DNS name on the compose network. Not localhost:
       # inside this container that resolves to the app itself.
       DB_URL: jdbc:postgresql://db:5432/ibms
@@ -39,13 +46,14 @@ services:
       CORS_ALLOWED_HOSTS: ${CORS_ALLOWED_HOSTS:-}
       APP_URL: ${APP_URL:-http://localhost:8080}
       # Only consulted on the first boot against an empty database; a no-op once
-      # the sysadmin has a password. NOTE: leaving this blank does *not* generate
-      # a random password today — AppConfig defaults it to a literal. See the
-      # comment on BOOTSTRAP_ADMIN_PASSWORD in .env.example.
+      # the sysadmin has a password. Blank here means a password is generated and
+      # logged exactly once, because AUTOGENERATE defaults on in a dev environment.
+      BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME:-mikepg}
       BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
       # Outbound email. This block is an explicit allowlist, not env_file — anything
-      # missing here is simply absent inside the container, and unset SMTP_HOST means
-      # notifications are logged, not sent.
+      # missing here is simply absent inside the container. `log` means notifications
+      # are logged rather than sent; `smtp` requires SMTP_HOST below.
+      EMAIL_DELIVERY: ${EMAIL_DELIVERY:-log}
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_USERNAME: ${SMTP_USERNAME:-}

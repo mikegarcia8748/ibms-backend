@@ -12,18 +12,22 @@ business rule and authorization check runs in the API, not the client.
 - **SQL injection.** All data access goes through Exposed with bound parameters; no string-built SQL.
 - **Money integrity.** `numeric(14,2)` ↔ BigDecimal end to end; never `Double` in billing math.
 - **Error hygiene.** `StatusPages` maps domain errors to `ApiError{error,code}`; unexpected errors are logged server-side and returned as a generic 500 (no stack traces leaked).
-- **Transport.** CORS restricted to `CORS_ALLOWED_HOSTS` when set.
-- **Startup guards.** The app warns loudly if `JWT_SECRET` is the built-in default.
+- **Transport.** CORS is restricted to `CORS_ALLOWED_HOSTS`. An empty list allows any host, which is permitted only when `APP_ENV=dev`; outside dev it is a boot failure, so CORS cannot fail open in a deployment that forgot to set it.
+- **Startup guards.** Config is validated in one fail-closed pass and the app **refuses to start** on a problem, reporting all of them at once. `APP_ENV` defaults to `prod` when unset, so a forgotten variable produces an itemised failure rather than the permissive path. Outside dev this covers `JWT_SECRET` (minimum length plus a placeholder-shape check, not a single exact-string match), `DB_PASSWORD`, `APP_URL` (https, non-localhost), `CORS_ALLOWED_HOSTS`, `EMAIL_DELIVERY` and the bootstrap-admin settings; numeric knobs are range-checked everywhere (e.g. `JWT_EXPIRES_MINUTES` cannot exceed a day, `BCRYPT_COST` floors at 10).
+- **Key separation.** Presigned attachment URLs are signed with `PRESIGN_SECRET`, derived from `JWT_SECRET` by default but never equal to it, so a password-change challenge can never verify as an attachment token. Setting it explicitly decouples the two rotations.
+- **Metrics.** `/metrics-micrometer` requires an authenticated sysadmin. It exposes request timings, URI templates and JVM internals, so point Prometheus at it with a service account rather than scraping anonymously.
+- **Outbound email is explicit.** `EMAIL_DELIVERY` must be `smtp` or `log`, with no default outside dev. A deployment that merely forgets `SMTP_HOST` can no longer silently drop every notification.
 
 ## Must-do before production
-- Set a strong random **`JWT_SECRET`**.
-- Set **`BOOTSTRAP_ADMIN_PASSWORD`** rather than letting the backend generate one — the generated value is written to the application log, which is usually shipped somewhere less private than a password belongs. Either way, change it at first login; it must be changed before the account can do anything.
-- Set **`CORS_ALLOWED_HOSTS`** to the real client origin(s) — otherwise CORS falls back to `anyHost()` for local dev.
+- Set **`APP_ENV=prod`**. Everything below is then enforced at startup rather than trusted; the app will list anything missing and refuse to boot.
+- Set a strong random **`JWT_SECRET`** (`openssl rand -base64 48`). Short or placeholder-shaped values are rejected.
+- Set **`BOOTSTRAP_ADMIN_PASSWORD`** rather than opting into `BOOTSTRAP_ADMIN_AUTOGENERATE_PASSWORD` — the generated value is written to the application log, which is usually shipped somewhere less private than a password belongs. Either way, change it at first login; it must be changed before the account can do anything.
+- Set **`CORS_ALLOWED_HOSTS`** to the real client origin(s).
 - Terminate TLS in front of the service (Cloud Run / load balancer).
 
 ## Known gaps / follow-ups (Phase 7 hardening)
 - **Attachment access scoping.** `GET /attachments/{id}` currently allows any authenticated user to download any attachment by id (UUIDs are unguessable, all users are internal staff). Scope downloads to the owning entity's access when the presigned GCS/S3 flow lands.
-- **Email outbox double-send window.** The dispatcher marks a row's terminal status *after* the SMTP handoff, so a crash in between leaves it `queued` and it can be sent twice on the next pass. A `sending` claim state or `FOR UPDATE SKIP LOCKED` would close it.
+- **Email outbox double-send window.** The dispatcher marks a row's terminal status *after* the SMTP handoff, so a crash in between leaves it `queued` and it can be sent twice on the next pass. A `sending` claim state or `FOR UPDATE SKIP LOCKED` would close it. (A duplicated dispatcher coroutine that drained the same outbox concurrently — widening this considerably — has been removed.)
 - **`SMTP_PASSWORD`** is a secret on the same footing as `DB_PASSWORD` — set it through the service's env config (WinSW `<env>` / compose), never in a committed file. Keep `SMTP_STARTTLS=true` unless the relay is reachable only over a trusted internal network.
 - **OCR prompt-injection** guard is N/A until the Gemini OCR ingestion (Phase 3) is built; when it is, keep extraction read-only and whitelist parsed account numbers before any write.
 - **Rate limiting** and request-size limits are not yet configured.

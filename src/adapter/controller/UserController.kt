@@ -6,10 +6,10 @@ import com.puregoldbe.ibms.application.usecase.GetUserNotificationSubscriptionsU
 import com.puregoldbe.ibms.application.usecase.ListUsersUseCase
 import com.puregoldbe.ibms.application.usecase.ProvisionUserUseCase
 import com.puregoldbe.ibms.application.usecase.ResetUserPasswordUseCase
+import com.puregoldbe.ibms.application.usecase.UpdateUserEmailUseCase
 import com.puregoldbe.ibms.application.usecase.UpdateUserNotificationSubscriptionsUseCase
 import com.puregoldbe.ibms.application.usecase.UpdateUserRoleUseCase
 import com.puregoldbe.ibms.application.usecase.UpdateUserStatusUseCase
-import com.puregoldbe.ibms.domain.error.DomainError
 import com.puregoldbe.ibms.domain.model.NotificationEvent
 import com.puregoldbe.ibms.domain.model.ProvisionUserRequest
 import com.puregoldbe.ibms.domain.model.UpdateRoleRequest
@@ -25,6 +25,7 @@ fun Route.userRoutes(
     resetUserPassword: ResetUserPasswordUseCase,
     updateUserRole: UpdateUserRoleUseCase,
     updateUserStatus: UpdateUserStatusUseCase,
+    updateUserEmail: UpdateUserEmailUseCase,
     getUserNotificationSubscriptions: GetUserNotificationSubscriptionsUseCase,
     updateUserNotificationSubscriptions: UpdateUserNotificationSubscriptionsUseCase,
 ) {
@@ -68,6 +69,14 @@ fun Route.userRoutes(
             val req = call.receive<UpdateUserStatusRequest>()
             call.ok(updateUserStatus(call.pathId(), req.status))
         }
+        // The delivery address for every notification this user is subscribed to. Without
+        // one they receive nothing, and provisioning does not require it — so this is the
+        // endpoint that actually turns notifications on for a user.
+        patch("/{id}/email") {
+            call.authorize(UserRole.SYSADMIN)
+            val req = call.receive<UpdateUserEmailRequest>()
+            call.ok(updateUserEmail(call.pathId(), req.email))
+        }
         // Which event emails a user receives — configured on their profile by the sysad.
         get("/{id}/notification-subscriptions") {
             call.authorize(UserRole.SYSADMIN)
@@ -76,18 +85,21 @@ fun Route.userRoutes(
         put("/{id}/notification-subscriptions") {
             call.authorize(UserRole.SYSADMIN)
             val req = call.receive<UpdateNotificationSubscriptionsRequest>()
-            val events = req.events.map { key ->
-                NotificationEvent.fromKey(key)
-                    ?: throw DomainError.Validation("unknown notification event '$key'")
-            }.toSet()
+            val events = req.events.map { parseNotificationEvent(it) }.toSet()
             call.ok(subscriptionsResponse(updateUserNotificationSubscriptions(call.pathId(), events)))
         }
     }
 }
 
-/** Build the API view: the user's subscribed event keys + the full selectable catalogue. */
+/**
+ * Build the API view: the user's subscribed event keys + the full selectable catalogue.
+ * `deliverableSubscribers` is left null here (and so omitted) — it is a whole-org number
+ * that belongs to `GET /admin/notifications/events`, not to one user's profile.
+ */
 private fun subscriptionsResponse(subscribed: Set<NotificationEvent>) =
     NotificationSubscriptionsResponse(
         subscribed = subscribed.map { it.key }.sorted(),
-        available = NotificationEvent.entries.map { NotificationEventInfo(it.key, it.label) },
+        available = NotificationEvent.entries.map {
+            NotificationEventInfo(key = it.key, label = it.label, description = it.description)
+        },
     )

@@ -23,6 +23,9 @@ interface UserRepository {
     fun updateRole(id: String, role: UserRole): UserProfile?
     fun updateStatus(id: String, status: UserStatus): UserProfile?
 
+    /** Set or clear the notification delivery address; [email] must already be normalised. */
+    fun updateEmail(id: String, email: String?): UserProfile?
+
     // --- credential access (hashes; never expose these through a controller) ---
     fun credentialsByUsername(username: String): UserCredentials?
     fun credentialsById(id: String): UserCredentials?

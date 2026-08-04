@@ -24,8 +24,50 @@ data class NotificationSubscriptionsResponse(
     val available: List<NotificationEventInfo>,
 )
 
+/**
+ * One entry of the event catalogue. [deliverableSubscribers] is populated only by
+ * `GET /admin/notifications/events`; elsewhere it is null and therefore omitted from
+ * the JSON (`encodeDefaults` is off), keeping the embedded `available[]` arrays lean.
+ */
 @Serializable
-data class NotificationEventInfo(val key: String, val label: String)
+data class NotificationEventInfo(
+    val key: String,
+    val label: String,
+    val description: String,
+    val deliverableSubscribers: Int? = null,
+)
+
+/** The full catalogue of subscribable events, with live recipient counts. */
+@Serializable
+data class NotificationEventCatalogResponse(val events: List<NotificationEventInfo>)
+
+/**
+ * A bulk subscription write. `mode` and `roles` are plain strings rather than enums
+ * on purpose: an unrecognised enum value would fail inside content negotiation and
+ * surface as a 500, whereas parsing here yields the documented 400.
+ */
+@Serializable
+data class BulkNotificationSubscriptionRequest(
+    val mode: String,
+    val events: List<String> = emptyList(),
+    val userIds: List<String> = emptyList(),
+    val roles: List<String> = emptyList(),
+)
+
+/** One role's default subscriptions; `role` is the lowercase role wire value. */
+@Serializable
+data class NotificationRoleDefaultEntry(val role: String, val events: List<String>)
+
+/** Defaults for every role, in enum declaration order — roles with none carry `[]`. */
+@Serializable
+data class NotificationRoleDefaultsResponse(val defaults: List<NotificationRoleDefaultEntry>)
+
+@Serializable
+data class UpdateNotificationRoleDefaultsRequest(val defaults: List<NotificationRoleDefaultEntry>)
+
+/** Set or clear a user's notification delivery address. An explicit `null` clears it. */
+@Serializable
+data class UpdateUserEmailRequest(val email: String? = null)
 
 /**
  * Summary of a bulk-import run: counts of entities created vs reused, plus reasons.

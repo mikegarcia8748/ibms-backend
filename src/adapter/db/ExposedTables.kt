@@ -159,7 +159,7 @@ object BatchSequences : Table("batch_sequences") {
 }
 
 object TopSheets : UUIDTable("topsheets") {
-    val invoiceNumber        = text("invoice_number").nullable().uniqueIndex()
+    val invoiceNumber        = text("invoice_number").nullable()
     val batchNumber          = text("batch_number").nullable()
     val billingPeriod        = text("billing_period")
     val providerId           = reference("provider_id", Providers).nullable()
@@ -176,6 +176,12 @@ object TopSheets : UUIDTable("topsheets") {
     val compilationDate      = timestamp("compilation_date")
     val createdAt            = timestamp("created_at")
     val updatedAt            = timestamp("updated_at")
+
+    // Mirrors uq_topsheet_invoice_per_provider (V22): the acronym-based invoice number
+    // is unique per provider, not globally — distinct providers may share an acronym.
+    init {
+        uniqueIndex("uq_topsheet_invoice_per_provider", providerId, invoiceNumber)
+    }
 }
 
 object TopSheetDetails : UUIDTable("topsheet_details") {
@@ -294,12 +300,24 @@ object EmailLog : UUIDTable("email_log") {
     val sentAt           = timestamp("sent_at").nullable()
 }
 
-/** Per-user notification subscriptions (V19); one row per (user, event) the user opts into. */
+/** Per-user notification subscriptions (V20); one row per (user, event) the user opts into. */
 object UserNotificationSubscriptions : Table("user_notification_subscriptions") {
     val userId    = reference("user_id", Users)
     val eventType = text("event_type")
     val createdAt = timestamp("created_at")
     override val primaryKey = PrimaryKey(userId, eventType)
+}
+
+/**
+ * Per-role default subscriptions (V21), seeded into [UserNotificationSubscriptions]
+ * when a user is provisioned. A template only — editing these never retrofits
+ * existing users.
+ */
+object NotificationRoleDefaults : Table("notification_role_defaults") {
+    val role      = pgEnum<UserRole>("role", "user_role")
+    val eventType = text("event_type")
+    val createdAt = timestamp("created_at")
+    override val primaryKey = PrimaryKey(role, eventType)
 }
 
 object AccountChangeRequests : UUIDTable("account_change_requests") {

@@ -447,7 +447,11 @@ Valid account statuses: `ACTIVE`, `TERMINATION_REQUESTED`, `TRANSFERRED`, `INACT
 | `notes` | No | |
 | `installationFee` | No | |
 | `billingPeriodLabel` | No | Descriptive, e.g. "1st to 30th" |
-| `subscriptionProofIds` | No | List of attachment IDs (0..n) |
+| `subscriptionProofIds` | Yes | At least one attachment ID; the first must be a fully-uploaded PDF |
+
+- **Rule:** A subscription proof is mandatory: the list must be non-empty, and the first attachment must exist, have been fully uploaded (`sizeBytes` set), and have content type `application/pdf`.
+  - **Enforcement point:** `CreateAccountUseCase` in `AccountUseCases.kt` — `subscriptionProofIds.firstOrNull() ?: throw Validation`, then `PdfProofPolicy.requireUploadedPdf(...)`. The `/accounts/isp` route enforces the same rule on its singular `subscriptionProofId` (`CreateISPAccountUseCase`).
+  - **Rationale:** Every subscription must carry documented proof; a presigned-but-never-uploaded attachment is not proof.
 
 ### Uniqueness Constraints
 
@@ -662,6 +666,10 @@ All transitions are one-way; no reversal endpoints exist.
 
 - **Rule:** The invoice prefix is stored in `invoice_sequences.prefix` at provider creation and can be overridden.
   - **Enforcement point:** `CompileTopSheetUseCase` — `sequences.prefixOf(providerId) ?: InvoiceNumberFormatter.prefix(provider.name)`.
+
+- **Rule:** `invoice_number` is unique **per provider**, not globally.
+  - **Enforcement point:** DB unique index `uq_topsheet_invoice_per_provider ON topsheets (provider_id, invoice_number)` (V22 migration; replaced the global `UNIQUE` from V1).
+  - **Rationale:** The acronym is truncated to 4 characters and each provider's sequence starts at 1, so two providers whose names collapse to the same acronym (`"Converge"` / `"Convergys"` → `CONV`) both mint `CONV-YYYYMM-0001`. Under the old global constraint the second provider could never confirm a top sheet in that period.
 
 ### Eligibility Rules for Compilation
 

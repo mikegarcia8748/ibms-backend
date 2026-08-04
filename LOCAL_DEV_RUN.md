@@ -62,11 +62,20 @@ Key values and what they control:
 
 | Variable                | Default (in .env)                          | Notes                          |
 |-------------------------|--------------------------------------------|--------------------------------|
+| `APP_ENV`              | `dev`                                      | Relaxes the fail-closed checks. **Unset means `prod`**, which refuses to boot without real secrets |
+| `APP_PORT`             | `8082`                                     | Port the local JVM binds; 8080 is the compose app container |
+| `APP_URL`              | `http://localhost:8082`                    | Must match `APP_PORT` — presigned attachment links are built from it |
 | `DB_URL`               | `jdbc:postgresql://localhost:5432/ibms`    | Centralized dev Postgres from `docker-compose.yml` (shared with the Docker app) |
-| `BCRYPT_COST`          | `4`                                        | Low for dev speed; 12 in prod  |
-| `JWT_SECRET`           | `local-dev-secret-not-for-production`      | Never use outside localhost    |
-| `BOOTSTRAP_ADMIN_PASSWORD` | *(blank = auto-generated)*             | Logged once on first boot      |
+| `BCRYPT_COST`          | `4`                                        | Low for dev speed; floors at 10 outside dev |
+| `JWT_SECRET`           | `local-dev-secret-not-for-production`      | Never use outside localhost; rejected outside dev |
+| `BOOTSTRAP_ADMIN_PASSWORD` | *(blank = auto-generated in dev)*      | Logged once on first boot       |
+| `EMAIL_DELIVERY`       | `log`                                      | Notifications logged, not sent. `smtp` requires `SMTP_HOST` |
 | `STORAGE_LOCAL_DIR`    | `./storage`                                | Uploads stored here on disk    |
+
+A variable already set in your shell wins over the `.env` entry, so
+`BOOTSTRAP_ADMIN_PASSWORD='...' ./gradlew run` overrides the file. Only `./gradlew run`
+reads `.env` at all — for the packaged jar, load it yourself:
+`set -a; source .env; set +a; java -jar build/libs/ibms-backend-all.jar`
 
 ---
 

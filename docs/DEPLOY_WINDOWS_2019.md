@@ -15,11 +15,11 @@ Step-by-step guide to make the IBMS backend run on a **Windows Server 2019** box
 
 This backend is built for PostgreSQL at every layer — this is not a config switch:
 
-- **Driver is hard-coded:** `driverClassName = "org.postgresql.Driver"` ([Database.kt:20](../src/adapter/db/Database.kt)); default URL `jdbc:postgresql://…` ([AppConfig.kt:68](../src/infrastructure/config/AppConfig.kt)).
+- **Driver is hard-coded:** `driverClassName = "org.postgresql.Driver"` ([Database.kt](../src/adapter/db/Database.kt)); `DB_URL` defaults to `jdbc:postgresql://…` ([AppConfig.kt](../src/infrastructure/config/AppConfig.kt)).
 - **Migrations are PostgreSQL SQL** and require two PostgreSQL extensions with **no SQL Server equivalent**: `pgcrypto` (for `gen_random_uuid()` primary keys) and `citext` (case-insensitive email) — [V1__init.sql:18-19](../resources/db/migration/V1__init.sql). Also `UUID` columns and partial unique indexes.
 - **Code is Postgres-specific:** it handles `org.postgresql.util.PSQLException` and `PGobject` directly, and uses `flyway-database-postgresql`.
 
-Pointing it at SQL Server 2016 would mean rewriting all 14 migrations in T-SQL, swapping the JDBC driver and Exposed dialect, replacing `gen_random_uuid()`/`citext`/`PGobject` handling, converting partial indexes to filtered indexes, and re-testing every billing-math and idempotency path — **weeks of work, permanent maintenance divergence, and zero existing test coverage for that dialect.** Don't. (An outline is in the [Appendix](#appendix--if-you-are-forced-to-use-sql-server-2016) if you have no choice.)
+Pointing it at SQL Server 2016 would mean rewriting all 20 migrations in T-SQL, swapping the JDBC driver and Exposed dialect, replacing `gen_random_uuid()`/`citext`/`PGobject` handling, converting partial indexes to filtered indexes, and re-testing every billing-math and idempotency path — **weeks of work, permanent maintenance divergence, and zero existing test coverage for that dialect.** Don't. (An outline is in the [Appendix](#appendix--if-you-are-forced-to-use-sql-server-2016) if you have no choice.)
 
 **PostgreSQL and SQL Server coexist happily** on one Windows host — different service, different port (PG defaults to `5432`, SQL Server to `1433`). Installing PostgreSQL does not touch your SQL Server 2016 instance.
 
@@ -49,7 +49,7 @@ Only `443` is exposed to the network. `8080` and `5432` stay bound to localhost.
 | Item | Where | Notes |
 |---|---|---|
 | **PostgreSQL 16, Windows x64** | postgresql.org → EDB installer | Officially supports Windows Server 2019. Bundles `pgcrypto` + `citext` contrib and `psql`. |
-| **Eclipse Temurin JRE 21 (MSI)** | adoptium.net | Matches the [Dockerfile](../Dockerfile) runtime (Java 21). Needed **on the server** to run the jar. |
+| **Eclipse Temurin JRE 25 (MSI)** | adoptium.net | Matches the [Dockerfile](../Dockerfile) runtime and `jvmToolchain(25)` in the build. The jar's class files are Java 25, so an older JRE fails with `UnsupportedClassVersionError`. Needed **on the server** to run the jar. |
 | **The fat jar** `ibms-backend-all.jar` | build it (see §5) | Build on a **dev/CI machine** and copy it over — the Gradle build needs internet to provision its JDK-25 toolchain, which an app server usually shouldn't have. |
 | **WinSW** (`WinSW.NET4.exe`) | github.com/winsw/winsw | Runs the jar as an auto-restarting Windows Service. WS2019 already has the required .NET Framework. |
 | **Caddy for Windows** | caddyserver.com | Reverse proxy + automatic HTTPS. Gives you **TLS 1.3**, which WS2019's built-in Schannel/IIS cannot. |
@@ -100,38 +100,45 @@ C:\ibms\
    service\               (WinSW lives here — see §7)
 ```
 
-Install the **Temurin JRE 21** MSI, then verify in a new terminal:
+Install the **Temurin JRE 25** MSI, then verify in a new terminal:
 
 ```powershell
-java -version    # must report 21.x
+java -version    # must report 25.x
 ```
 
 ---
 
-## 6. Configuration & secrets (override the insecure defaults!)
+## 6. Configuration & secrets
 
 The app reads all config from **environment variables** (the `.env` auto-load only applies to `./gradlew run` in dev — it does nothing for the packaged jar). Set these in the WinSW service config in §7 so they aren't exposed machine-wide.
 
-| Variable | Value | Must change? |
+With `APP_ENV=prod` the app **validates everything at startup and refuses to boot** if something is missing or weak, listing every problem at once. The ✅ rows below are enforced, not merely advised — you cannot accidentally deploy with a placeholder secret or an any-host CORS policy. [.env.example](../.env.example) is the canonical list of every key.
+
+| Variable | Value | Must set? |
 |---|---|---|
+| `APP_ENV` | `prod` | ✅ **defaults to `prod` if unset, which is deliberate — but set it explicitly** |
+| `APP_PORT` | `8080` | the port the process binds |
 | `DB_URL` | `jdbc:postgresql://localhost:5432/ibms` | |
 | `DB_USER` | `ibms` | |
-| `DB_PASSWORD` | the password from §4 | ✅ |
+| `DB_PASSWORD` | the password from §4 | ✅ (the local-dev value `ibms` is rejected) |
 | `DB_POOL_SIZE` | `10` | |
-| `JWT_SECRET` | 48+ random bytes, base64 | ✅ **default `dev-secret-change-me` is insecure** |
-| `BOOTSTRAP_ADMIN_USERNAME` | e.g. `mikepg` | the seeded admin login |
-| `BOOTSTRAP_ADMIN_PASSWORD` | a strong one-time password | ✅ **default `Password@123` is insecure** |
+| `JWT_SECRET` | 48+ random bytes, base64 | ✅ (rejected if under 32 chars or placeholder-shaped) |
+| `PRESIGN_SECRET` | optional; derived from `JWT_SECRET` when blank | set it to rotate attachment links independently of session tokens |
+| `BOOTSTRAP_ADMIN_USERNAME` | e.g. `mikepg` | ✅ the seeded admin login |
+| `BOOTSTRAP_ADMIN_PASSWORD` | a strong one-time password | ✅ unless `BOOTSTRAP_ADMIN_AUTOGENERATE_PASSWORD=true` |
+| `BOOTSTRAP_ADMIN_AUTOGENERATE_PASSWORD` | `true` to generate one and log it once instead | prefer setting the password — the generated one lands in the service log |
 | `STORAGE_LOCAL_DIR` | `C:\ibms\storage` | |
-| `CORS_ALLOWED_HOSTS` | your Wasm client origin(s), comma-separated | ✅ (else falls back to any-host) |
-| `APP_URL` | `https://ibms.your-domain.example` | |
-| `SMTP_HOST` | the org's internal mail relay | ✅ (unset ⇒ notifications are logged, never sent) |
+| `CORS_ALLOWED_HOSTS` | your Wasm client origin(s), comma-separated | ✅ (empty no longer falls back to any-host — it fails the boot) |
+| `APP_URL` | `https://ibms.your-domain.example` | ✅ (must be https and not localhost) |
+| `EMAIL_DELIVERY` | `smtp` for real delivery, `log` to only log | ✅ no default — choose deliberately |
+| `SMTP_HOST` | the org's internal mail relay | ✅ when `EMAIL_DELIVERY=smtp` |
 | `SMTP_PORT` | `587` STARTTLS, `465` implicit TLS, `25` plain | |
 | `SMTP_USERNAME` / `SMTP_PASSWORD` | relay credentials; omit both if the relay takes no AUTH | |
-| `SMTP_STARTTLS` / `SMTP_SSL` | `true`/`false` — `SSL` only with port 465 | |
+| `SMTP_STARTTLS` / `SMTP_SSL` | `true`/`false` — mutually exclusive; `SSL` only with port 465 | a typo in either fails the boot rather than silently downgrading to plaintext |
 | `MAIL_FROM_EMAIL` | the generic address the relay will send as | ✅ (defaults to `SMTP_USERNAME`) |
 | `MAIL_FROM_NAME` | `IBMS Notifications` | |
 
-> Per [SECURITY.md](../SECURITY.md), `JWT_SECRET` and `BOOTSTRAP_ADMIN_PASSWORD` **must** be overridden before production — the code ships with weak known defaults ([AppConfig.kt:74,87](../src/infrastructure/config/AppConfig.kt)).
+> Per [SECURITY.md](../SECURITY.md), `JWT_SECRET`, `DB_PASSWORD` and the bootstrap-admin credential must all be real values before production. These are now enforced by `AppConfig.fromEnv()` rather than left to the operator, so a missing one is a startup failure with a named key.
 
 Generate a strong `JWT_SECRET` in PowerShell:
 
@@ -159,6 +166,8 @@ In `C:\ibms\service\`, put `WinSW.NET4.exe` renamed to `ibms.exe`, alongside `ib
   <onfailure action="restart" delay="10 sec"/>
   <log mode="roll-by-size"><sizeThreshold>10240</sizeThreshold><keepFiles>8</keepFiles></log>
 
+  <env name="APP_ENV" value="prod"/>
+  <env name="APP_PORT" value="8080"/>
   <env name="DB_URL" value="jdbc:postgresql://localhost:5432/ibms"/>
   <env name="DB_USER" value="ibms"/>
   <env name="DB_PASSWORD" value="CHANGE_ME_strong_db_password"/>
@@ -170,6 +179,7 @@ In `C:\ibms\service\`, put `WinSW.NET4.exe` renamed to `ibms.exe`, alongside `ib
   <env name="CORS_ALLOWED_HOSTS" value="https://ibms-client.your-domain.example"/>
   <env name="APP_URL" value="https://ibms.your-domain.example"/>
 
+  <env name="EMAIL_DELIVERY" value="smtp"/>
   <env name="SMTP_HOST" value="mail-relay.your-domain.example"/>
   <env name="SMTP_PORT" value="587"/>
   <env name="SMTP_USERNAME" value="ibms-notifications@your-domain.example"/>
@@ -195,7 +205,7 @@ The service is now `Automatic` (starts on boot) and restarts itself on crash. Lo
 
 ## 8. First run — Flyway migrates, bootstrap admin is created
 
-On first start the app **runs Flyway migrations automatically** (V1–V14) against the empty `ibms` database. Watch the log:
+On first start the app **runs Flyway migrations automatically** (V1–V20) against the empty `ibms` database. Watch the log:
 
 ```powershell
 Get-Content C:\ibms\service\ibms.out.log -Wait
@@ -290,7 +300,7 @@ Keep ~14–30 days and test a restore periodically. **The dumps and attachment c
 
 - [ ] PostgreSQL 16 installed; service running; `max server memory` capped on SQL Server 2016 if it's busy
 - [ ] `ibms` database + role created; `pgcrypto` + `citext` extensions pre-created; schema privileges granted
-- [ ] Temurin **JRE 21** installed (`java -version` → 21)
+- [ ] Temurin **JRE 25** installed (`java -version` → 25)
 - [ ] Fat jar built off-server and copied to `C:\ibms\app`
 - [ ] `JWT_SECRET` and `BOOTSTRAP_ADMIN_PASSWORD` overridden with strong values; `CORS_ALLOWED_HOSTS` set
 - [ ] WinSW service installed, `Automatic`, started
