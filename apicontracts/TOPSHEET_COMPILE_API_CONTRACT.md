@@ -27,6 +27,7 @@ Base URL: `/` · Auth: `Authorization: Bearer <JWT>` · Role: **secretary** (unl
 | POST | `/topsheets/{id}/cancel` | Bearer (secretary) | Void a DRAFT or COMPILED topsheet: → CANCELLED. Drops its lines. |
 | POST | `/topsheets/{id}/generate-rfp` | Bearer (secretary) | Call the external RFP system to assign an RFP number + unique key per line: COMPILED → RFP_ASSIGNED. **Idempotent**. |
 | POST | `/topsheets/{id}/release-to-finance` | Bearer (secretary) | Notify the external system and hand the batch to finance: RFP_ASSIGNED → APPROVED. |
+| GET | `/exports/topsheet/{id}.xlsx` | Bearer (secretary, finance) | Download the compiled TopSheet as an Excel spreadsheet. |
 
 Payment (`POST /topsheets/{id}/pay`, finance-only) and the cheque exports are documented in
 `CHEQUE_PAYMENT_API_CONTRACT.md`.
@@ -47,6 +48,7 @@ stateDiagram-v2
     COMPILED --> CANCELLED: POST /topsheets/{id}/cancel
     DRAFT --> DRAFT: PATCH /{id}/lines/{lineId} (edit amount)
     DRAFT --> DRAFT: DELETE /{id}/lines/{lineId} (remove account)
+    COMPILED --> [*]: GET /exports/topsheet/{id}.xlsx
 ```
 
 **Notes:**
@@ -250,6 +252,62 @@ RFP_ASSIGNED → APPROVED (`approved` == "released to finance").
 
 ---
 
+## GET `/exports/topsheet/{id}.xlsx`
+
+Downloads the compiled TopSheet report as an Excel spreadsheet. Bypasses the JSON
+response envelope — the body is the raw workbook.
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `id` | `string (UUID)` | The TopSheet ID. |
+
+### Authorization
+
+Bearer token. Allowed roles: **secretary**, **finance**.
+
+### Workbook Layout
+
+Sheet `TopSheet Report`: the title `PUREGOLD PRICE CLUB, INC.`, the subtitle
+`TopSheet Report`, a metadata block (`Provider`, `Invoice`, `Billing Period`,
+`Total Accounts`) with the fixed signatories (`By` Mary Ann Agustin, `Noted by`
+Gilbert Arciaga, `Approved by` Mr. Vincent Co) alongside it, then the line table.
+
+| # | Column | Source |
+|---|--------|--------|
+| 1 | NO. | Row number (1-based) |
+| 2 | STORE CO | line `branchCode` |
+| 3 | STORE NAME | line `storeName` |
+| 4 | CID# | line `circuitId` |
+| 5 | ACCT# | line `accountNumber` |
+| 6 | MRC | line `proratedAmount` |
+| 7 | ARREARS | line `arrearsAmount` |
+| 8 | INVOICE NUMBER | topsheet `invoiceNumber` (the same value on every row) |
+
+The closing `GRAND TOTAL` row carries the MRC subtotal under **MRC**, the arrears
+subtotal under **ARREARS**, and their sum under **INVOICE NUMBER**; that sum equals
+the topsheet's `totalAmount`.
+
+### Success — `200 OK`
+
+| Header | Value |
+|--------|-------|
+| `Content-Type` | `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` |
+| `Content-Disposition` | `attachment; filename="TopSheet_{invoiceNumber}_{billingPeriod}.xlsx"` |
+
+Body: binary Excel bytes.
+
+### Error Responses
+
+| Status | Condition |
+|--------|-----------|
+| `401` | No/invalid bearer token. |
+| `403` | Caller lacks the secretary or finance role. |
+| `404` | TopSheet not found. |
+
+---
+
 ## Idempotency
 
 `POST /topsheets/draft`, `/confirm`, `/generate-rfp`, and `/pay` honor an optional
@@ -299,6 +357,87 @@ Standard envelope: `{ "result": "error", "status": "4xx", "message": "...", "dat
 
 ---
 
+## Example — cURL
+
+### Create draft
+```bash
+curl -X POST http://localhost:8080/topsheets/draft \
+  -H "Authorization: Bearer <jwt>" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: draft-conv-202607" \
+  -d '{"providerId":"<provider-uuid>","billingPeriod":"2026-07"}'
+```
+
+### Override a draft line's prorated amount
+```bash
+curl -X PATCH http://localhost:8080/topsheets/<topsheet-id>/lines/<line-id> \
+  -H "Authorization: Bearer <jwt>" \
+  -H "Content-Type: application/json" \
+  -d '{"proratedAmount":"1250.00"}'
+```
+
+### Remove a line
+```bash
+curl -X DELETE http://localhost:8080/topsheets/<topsheet-id>/lines/<line-id> \
+  -H "Authorization: Bearer <jwt>"
+```
+
+### Confirm the draft
+```bash
+curl -X POST http://localhost:8080/topsheets/<topsheet-id>/confirm \
+  -H "Authorization: Bearer <jwt>" \
+  -H "Idempotency-Key: confirm-<topsheet-id>"
+```
+
+### Download the Excel export
+```bash
+curl -O -J http://localhost:8080/exports/topsheet/<topsheet-id>.xlsx \
+  -H "Authorization: Bearer <jwt>"
+```
+
+---
+
+## Example — JavaScript / Fetch
+
+```javascript
+// 1. Create the draft
+const draftRes = await fetch('/topsheets/draft', {
+  method: 'POST',
+  headers: {
+    'Authorization': `Bearer ${token}`,
+    'Content-Type': 'application/json',
+    'Idempotency-Key': `draft-${providerId}-${billingPeriod}`,
+  },
+  body: JSON.stringify({ providerId, billingPeriod: '2026-07' }),
+});
+const { data: draft } = await draftRes.json();
+
+// 2. Review the lines (sorted by store branchCode DESC)
+const linesRes = await fetch(`/topsheets/${draft.id}/lines`, {
+  headers: { 'Authorization': `Bearer ${token}` },
+});
+const { data: lines } = await linesRes.json();
+
+// 3. Confirm — mints the invoice + batch numbers
+const confirmRes = await fetch(`/topsheets/${draft.id}/confirm`, {
+  method: 'POST',
+  headers: {
+    'Authorization': `Bearer ${token}`,
+    'Idempotency-Key': `confirm-${draft.id}`,
+  },
+});
+const { data: compiled } = await confirmRes.json();
+console.log(`Compiled: ${compiled.invoiceNumber} / ${compiled.batchNumber}`);
+
+// 4. RFP numbers are assigned afterwards by the external system
+await fetch(`/topsheets/${draft.id}/generate-rfp`, {
+  method: 'POST',
+  headers: { 'Authorization': `Bearer ${token}` },
+});
+```
+
+---
+
 ## Notes for Frontend
 
 - Draft lines are returned sorted by `rfpSortOrder` (store branchCode descending). Display in this order.
@@ -310,3 +449,5 @@ Standard envelope: `{ "result": "error", "status": "4xx", "message": "...", "dat
   frees the accounts so a corrected topsheet can be drafted for the same provider/period.
 - The `proratedAmount` on each line can be overridden during review, within `[0.01, fullAmount]`.
 - After `rfp_assigned`, the topsheet can no longer be cancelled.
+- The Excel export is available for any compiled, rfp_assigned, approved or paid topsheet. Its
+  filename carries the invoice number, so it is only meaningful once `invoiceNumber` is populated.

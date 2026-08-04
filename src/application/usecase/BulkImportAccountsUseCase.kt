@@ -205,8 +205,12 @@ class BulkImportAccountsUseCase(
                     if (accounts.existsByIdentity(storeId, provider.id, row.accountNumber, row.circuitId)) {
                         accountCreated = false
                     } else {
-                        val installationDate = parseDate(row.startDate) ?: LocalDate(1970, 1, 1)
-                        val notes = if (row.startDate == null) {
+                        // Note whenever we fall back to the epoch sentinel — the source date was
+                        // either blank or present-but-unparseable. Gating on blankness alone left
+                        // an unparseable date silently stamped 1970 with nothing to explain it.
+                        val parsedStart = parseDate(row.startDate)
+                        val installationDate = parsedStart ?: LocalDate(1970, 1, 1)
+                        val notes = if (parsedStart == null) {
                             "Installation date unavailable from source (bulk import)"
                         } else {
                             null
@@ -220,7 +224,7 @@ class BulkImportAccountsUseCase(
                                 serviceType = row.serviceType,
                                 rate = row.rate,
                                 installationDate = installationDate,
-                                contractStartDate = parseDate(row.startDate),
+                                contractStartDate = parsedStart,
                                 notes = notes,
                             ),
                             createdBy = actorId,
