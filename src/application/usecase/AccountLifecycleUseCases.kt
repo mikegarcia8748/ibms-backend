@@ -4,6 +4,7 @@ import com.puregoldbe.ibms.domain.error.DomainError
 import com.puregoldbe.ibms.domain.model.Account
 import com.puregoldbe.ibms.domain.model.AccountStatus
 import com.puregoldbe.ibms.domain.model.AccountUpsertRequest
+import com.puregoldbe.ibms.domain.model.AttachmentPurpose
 import com.puregoldbe.ibms.domain.model.CursorPage
 import com.puregoldbe.ibms.domain.model.TransferRecord
 import com.puregoldbe.ibms.domain.model.NotificationContext
@@ -40,7 +41,7 @@ class TransferAccountUseCase(
     suspend operator fun invoke(
         accountId: String,
         newStoreId: String,
-        proofId: String,
+        proofIds: List<String>,
         actorId: String?,
         idem: IdempotencyContext? = null,
     ): Account = tx.inTransaction {
@@ -55,7 +56,11 @@ class TransferAccountUseCase(
             }
             val newStore = stores.findById(newStoreId)
                 ?: throw DomainError.Validation("unknown newStoreId $newStoreId")
-            PdfProofPolicy.requireUploadedPdf(attachments.findById(proofId), "transfer proofId")
+            PdfProofPolicy.requireProofSet(
+                proofIds,
+                AttachmentPurpose.TRANSFER_PROOF,
+                field = "transfer proof",
+            ) { attachments.findById(it) }
             // Guard the destination against an existing live account with the same identity
             // (store, provider, account#, circuit). Since we mark the source TRANSFERRED below
             // — which frees the partial unique index — a bad transfer would otherwise slip past
@@ -87,7 +92,16 @@ class TransferAccountUseCase(
                 ),
                 createdBy = actor,
             )
-            transfers.create(old.storeId, newStoreId, old.id, moved.id, proofId, actor, clock.now())
+            // transfers.proof_id holds the first proof so pre-proofIds readers still work;
+            // the full set lives on account_attachments, linked to BOTH accounts — the
+            // source keeps its history, and the destination account's proof list is
+            // complete from the moment it exists.
+            val transfer = transfers.create(
+                old.storeId, newStoreId, old.id, moved.id, proofIds.first(), actor, clock.now(),
+            )
+            accounts.linkProofs(old.id, proofIds, AttachmentPurpose.TRANSFER_PROOF, actor, transfer.id)
+            accounts.linkProofs(moved.id, proofIds, AttachmentPurpose.TRANSFER_PROOF, actor, transfer.id)
+            proofIds.forEach { attachments.linkEntity(it, "account", moved.id) }
             activity.record(actor, "account.transferred", "account", moved.id)
             val oldStore = stores.findById(old.storeId)
             notifications.enqueue(
@@ -129,7 +143,7 @@ class DeactivateAccountUseCase(
 ) {
     suspend operator fun invoke(
         accountId: String,
-        proofId: String,
+        proofIds: List<String>,
         actorId: String?,
         idem: IdempotencyContext? = null,
     ): Account = tx.inTransaction {
@@ -139,10 +153,15 @@ class DeactivateAccountUseCase(
             if (account.status != AccountStatus.ACTIVE) {
                 throw DomainError.Conflict("only active accounts can be deactivated")
             }
-            PdfProofPolicy.requireUploadedPdf(attachments.findById(proofId), "deactivation proofId")
+            PdfProofPolicy.requireProofSet(
+                proofIds,
+                AttachmentPurpose.DEACTIVATION_PROOF,
+                field = "deactivation proof",
+            ) { attachments.findById(it) }
             val result = accounts.markTerminationRequested(accountId, clock.now())
                 ?: throw DomainError.NotFound("account $accountId not found")
-            accounts.linkProof(accountId, proofId)
+            accounts.linkProofs(accountId, proofIds, AttachmentPurpose.DEACTIVATION_PROOF, actorId)
+            proofIds.forEach { attachments.linkEntity(it, "account", accountId) }
             activity.record(actorId, "account.deactivation_requested", "account", accountId)
             notifications.enqueue(
                 NotificationEvent.ACCOUNT_DEACTIVATION_REQUESTED,

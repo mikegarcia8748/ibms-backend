@@ -83,6 +83,7 @@ object Attachments : UUIDTable("attachments") {
     val entityType  = text("entity_type").nullable()
     val entityId    = uuid("entity_id").nullable()
     val storageKey  = text("storage_key")
+    val fileName    = text("file_name").nullable()
     val contentType = text("content_type").nullable()
     val sizeBytes   = long("size_bytes").nullable()
     val uploadedBy  = reference("uploaded_by", Users).nullable()
@@ -137,12 +138,6 @@ object Accounts : UUIDTable("accounts") {
     // number may recur across stores and carry many circuits, and circuit may be empty.
     // See V16 migration (lineage: V4/V14 account_number-only → V15 added circuit →
     // V16 added store). Flyway owns DDL, so it is not declared here.
-}
-
-object AccountAttachments : Table("account_attachments") {
-    val accountId    = reference("account_id", Accounts)
-    val attachmentId = reference("attachment_id", Attachments)
-    override val primaryKey = PrimaryKey(accountId, attachmentId)
 }
 
 object InvoiceSequences : Table("invoice_sequences") {
@@ -214,6 +209,27 @@ object Transfers : UUIDTable("transfers") {
     val transferDate  = timestamp("transfer_date")
     val legacyId      = text("legacy_id").uniqueIndex().nullable()
     val createdAt     = timestamp("created_at")
+}
+
+/**
+ * Proofs attached to an account activity. The link row's [purpose] records which
+ * ACTIVITY attached the file — deliberately not copied from [Attachments.purpose],
+ * which is the file's own purpose — so a deactivation proof can never be read back
+ * as a subscription proof. [linkedAt] defaults to `now()` in the DB, which in
+ * Postgres is the TRANSACTION timestamp: the 1..3 proofs of one request share it
+ * exactly, which is what groups them into a single activity. [transferId] is set
+ * only on transfer proofs. Declared after [Transfers] because it references it.
+ * See V23.
+ */
+object AccountAttachments : Table("account_attachments") {
+    val accountId    = reference("account_id", Accounts)
+    val attachmentId = reference("attachment_id", Attachments)
+    val purpose      = pgEnum<AttachmentPurpose>("purpose", "attachment_purpose")
+    val sortOrder    = short("sort_order")
+    val linkedAt     = timestamp("linked_at")
+    val linkedBy     = reference("linked_by", Users).nullable()
+    val transferId   = reference("transfer_id", Transfers).nullable()
+    override val primaryKey = PrimaryKey(accountId, attachmentId)
 }
 
 object Activities : UUIDTable("activities") {

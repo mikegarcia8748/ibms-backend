@@ -5,6 +5,7 @@ import com.puregoldbe.ibms.adapter.db.Accounts
 import com.puregoldbe.ibms.adapter.db.Attachments
 import com.puregoldbe.ibms.adapter.db.Providers
 import com.puregoldbe.ibms.adapter.db.Stores
+import com.puregoldbe.ibms.adapter.db.Transfers
 import com.puregoldbe.ibms.adapter.db.Users
 import com.puregoldbe.ibms.adapter.db.jt
 import com.puregoldbe.ibms.adapter.db.keysetAfter
@@ -17,6 +18,8 @@ import com.puregoldbe.ibms.domain.model.Account
 import com.puregoldbe.ibms.domain.model.AccountStatus
 import com.puregoldbe.ibms.domain.model.AccountExportRow
 import com.puregoldbe.ibms.domain.model.AccountListItem
+import com.puregoldbe.ibms.domain.model.AccountProofLink
+import com.puregoldbe.ibms.domain.model.AttachmentPurpose
 import com.puregoldbe.ibms.domain.model.CursorPage
 import com.puregoldbe.ibms.domain.model.AccountUpsertRequest
 import com.puregoldbe.ibms.domain.model.ProviderAccountSummary
@@ -106,12 +109,12 @@ class ExposedAccountRepository : AccountRepository {
             if (createdBy != null) row[Accounts.createdBy] = EntityID(createdBy.toUuid(), Users)
         }.value
 
-        input.subscriptionProofIds.forEach { pid ->
-            AccountAttachments.insert {
-                it[AccountAttachments.accountId] = EntityID(newId, Accounts)
-                it[AccountAttachments.attachmentId] = EntityID(pid.toUuid(), Attachments)
-            }
-        }
+        linkProofs(
+            newId.toString(),
+            input.subscriptionProofIds,
+            AttachmentPurpose.SUBSCRIPTION_PROOF,
+            createdBy,
+        )
         return findById(newId.toString())!!
     }
 
@@ -228,12 +231,59 @@ class ExposedAccountRepository : AccountRepository {
         return if (n == 0) null else findById(id)
     }
 
-    override fun linkProof(accountId: String, proofId: String) {
-        AccountAttachments.insertIgnore {
-            it[AccountAttachments.accountId] = EntityID(accountId.toUuid(), Accounts)
-            it[AccountAttachments.attachmentId] = EntityID(proofId.toUuid(), Attachments)
+    override fun linkProofs(
+        accountId: String,
+        attachmentIds: List<String>,
+        purpose: AttachmentPurpose,
+        linkedBy: String?,
+        transferId: String?,
+    ) {
+        if (attachmentIds.isEmpty()) return
+        val account = EntityID(accountId.toUuid(), Accounts)
+        // linked_at is deliberately left to the column default: Postgres resolves now()
+        // to the TRANSACTION timestamp, so every row of this call shares one value and
+        // the set is recoverable as a single activity.
+        attachmentIds.forEachIndexed { index, attachmentId ->
+            AccountAttachments.insertIgnore {
+                it[AccountAttachments.accountId] = account
+                it[AccountAttachments.attachmentId] = EntityID(attachmentId.toUuid(), Attachments)
+                it[AccountAttachments.purpose] = purpose
+                it[AccountAttachments.sortOrder] = index.toShort()
+                if (linkedBy != null) it[AccountAttachments.linkedBy] = EntityID(linkedBy.toUuid(), Users)
+                if (transferId != null) it[AccountAttachments.transferId] = EntityID(transferId.toUuid(), Transfers)
+            }
         }
     }
+
+    override fun listProofs(accountId: String, purpose: AttachmentPurpose?): List<AccountProofLink> {
+        val uuid = accountId.toUuidOrNull() ?: return emptyList()
+        return AccountAttachments.selectAll()
+            .where { AccountAttachments.accountId eq uuid }
+            .apply { if (purpose != null) andWhere { AccountAttachments.purpose eq purpose } }
+            .orderBy(
+                AccountAttachments.linkedAt to SortOrder.DESC,
+                AccountAttachments.sortOrder to SortOrder.ASC,
+            )
+            .map { it.toProofLink() }
+    }
+
+    override fun listProofsByTransfer(transferId: String): List<AccountProofLink> {
+        val uuid = transferId.toUuidOrNull() ?: return emptyList()
+        return AccountAttachments.selectAll()
+            .where { AccountAttachments.transferId eq uuid }
+            .orderBy(AccountAttachments.sortOrder to SortOrder.ASC)
+            .map { it.toProofLink() }
+    }
+
+    private fun ResultRow.toProofLink() = AccountProofLink(
+        accountId = this[AccountAttachments.accountId].value.toString(),
+        attachmentId = this[AccountAttachments.attachmentId].value.toString(),
+        purpose = this[AccountAttachments.purpose],
+        sortOrder = this[AccountAttachments.sortOrder].toInt(),
+        linkedAt = this[AccountAttachments.linkedAt].kx(),
+        linkedBy = this[AccountAttachments.linkedBy]?.value?.toString(),
+        transferId = this[AccountAttachments.transferId]?.value?.toString(),
+    )
 
     override fun cancelTerminationRequested(id: String): Account? {
         val uuid = id.toUuidOrNull() ?: return null
@@ -252,9 +302,21 @@ class ExposedAccountRepository : AccountRepository {
             }
             .map { it.toAccount(proofIdsFor(it[Accounts.id].value)) }
 
+    /**
+     * `Account.subscriptionProofIds` carries ONLY subscription proofs. Before V23 this
+     * read the whole link table, so a deactivation or transfer proof surfaced here and
+     * TransferAccountUseCase copied it onto the account it creates at the destination.
+     */
     private fun proofIdsFor(accountId: UUID): List<String> =
         AccountAttachments.selectAll()
-            .where { AccountAttachments.accountId eq accountId }
+            .where {
+                (AccountAttachments.accountId eq accountId) and
+                    (AccountAttachments.purpose eq AttachmentPurpose.SUBSCRIPTION_PROOF)
+            }
+            .orderBy(
+                AccountAttachments.linkedAt to SortOrder.ASC,
+                AccountAttachments.sortOrder to SortOrder.ASC,
+            )
             .map { it[AccountAttachments.attachmentId].value.toString() }
 
     private fun ResultRow.toExportRow() = AccountExportRow(

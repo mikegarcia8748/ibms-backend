@@ -4,6 +4,7 @@ import com.puregoldbe.ibms.domain.error.DomainError
 import com.puregoldbe.ibms.domain.model.Account
 import com.puregoldbe.ibms.domain.model.AccountStatus
 import com.puregoldbe.ibms.domain.model.AccountUpsertRequest
+import com.puregoldbe.ibms.domain.model.AttachmentPurpose
 import com.puregoldbe.ibms.domain.model.CursorPage
 import com.puregoldbe.ibms.domain.model.NotificationContext
 import com.puregoldbe.ibms.domain.model.NotificationEvent
@@ -40,9 +41,9 @@ class GetAccountUseCase(
 }
 
 /**
- * Creates an ISP account. Business rules: rate (MRC) must be > 0; a subscription proof
- * PDF must be uploaded; provider & store must exist; (provider, account_number) is
- * unique (blocks duplicates the schema also guards).
+ * Creates an ISP account. Business rules: rate (MRC) must be > 0; 1..3 subscription
+ * proof PDFs must be uploaded; provider & store must exist; (provider, account_number)
+ * is unique (blocks duplicates the schema also guards).
  */
 class CreateAccountUseCase(
     private val accounts: AccountRepository,
@@ -56,9 +57,15 @@ class CreateAccountUseCase(
     suspend operator fun invoke(input: AccountUpsertRequest, actorId: String?): Account = tx.inTransaction {
         if (input.accountNumber.isBlank()) throw DomainError.Validation("accountNumber is required")
         if (!Money.isPositive(input.rate)) throw DomainError.Validation("rate (MRC) must be greater than 0")
-        val proofId = input.subscriptionProofIds.firstOrNull()
-            ?: throw DomainError.Validation("a subscription proof (PDF) is required")
-        PdfProofPolicy.requireUploadedPdf(attachments.findById(proofId), "subscriptionProofId")
+        // Validate EVERY proof, not just the first: an unknown id used to reach the
+        // insert and come back as an FK violation -> 500.
+        val proofIds = PdfProofPolicy.mergeProofIds(null, input.subscriptionProofIds)
+        PdfProofPolicy.requireProofSet(
+            proofIds,
+            AttachmentPurpose.SUBSCRIPTION_PROOF,
+            field = "subscriptionProofIds",
+            missingMessage = "a subscription proof (PDF) is required",
+        ) { attachments.findById(it) }
         providers.findById(input.providerId) ?: throw DomainError.Validation("unknown providerId ${input.providerId}")
         stores.findById(input.storeId) ?: throw DomainError.Validation("unknown storeId ${input.storeId}")
         if (accounts.existsByIdentity(input.storeId, input.providerId, input.accountNumber, input.circuitId)) {
@@ -67,7 +74,8 @@ class CreateAccountUseCase(
                 "duplicate_account_number",
             )
         }
-        val account = accounts.create(input, actorId)
+        val account = accounts.create(input.copy(subscriptionProofIds = proofIds), actorId)
+        proofIds.forEach { attachments.linkEntity(it, "account", account.id) }
         activity.record(actorId, "account.created", "account", account.id)
         notifications.enqueue(
             NotificationEvent.ACCOUNT_CREATED,

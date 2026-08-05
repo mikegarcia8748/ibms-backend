@@ -203,4 +203,57 @@ class PdfProofEnforcementSpec : BehaviorSpec({
             }
         }
     }
+
+    Given("presigning an upload") {
+        When("a proof purpose declares a non-PDF content type") {
+            Then("it is rejected up front, before any bytes travel") {
+                testApplication {
+                    application { testModule() }
+                    val token = signIn().token
+                    listOf("subscription_proof", "transfer_proof", "deactivation_proof").forEach { purpose ->
+                        val res = client.post("/attachments/presign/upload") {
+                            header(HttpHeaders.Authorization, "Bearer $token")
+                            contentType(ContentType.Application.Json)
+                            setBody("""{"fileName":"f.png","contentType":"image/png","purpose":"$purpose"}""")
+                        }
+                        res.status shouldBe HttpStatusCode.BadRequest
+                        res.bodyAsText().asJson().str("message") shouldBe
+                            "a $purpose must be uploaded as application/pdf"
+                    }
+                }
+            }
+        }
+
+        When("a non-proof purpose declares a non-PDF content type") {
+            Then("it is allowed — installation photos and OCR sources stay unrestricted") {
+                testApplication {
+                    application { testModule() }
+                    val token = signIn().token
+                    val res = client.post("/attachments/presign/upload") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                        contentType(ContentType.Application.Json)
+                        setBody("""{"fileName":"f.txt","contentType":"text/plain","purpose":"installation_proof"}""")
+                    }
+                    res.status shouldBe HttpStatusCode.OK
+                }
+            }
+        }
+    }
+
+    Given("uploading proof bytes") {
+        When("the declared Content-Length exceeds the 10 MB cap") {
+            Then("it returns 400 without the body ever being buffered") {
+                testApplication {
+                    application { testModule() }
+                    val token = signIn().token
+                    val (_, url) = presignOnly(token, "subscription_proof")
+                    // 11 MB of zeros: rejected from the header, so this never reaches the heap
+                    // as an attachment.
+                    val res = client.put(url) { setBody(ByteArray(11 * 1024 * 1024)) }
+                    res.status shouldBe HttpStatusCode.BadRequest
+                    res.bodyAsText().asJson().str("message") shouldBe "PDF exceeds the 10 MB limit"
+                }
+            }
+        }
+    }
 })

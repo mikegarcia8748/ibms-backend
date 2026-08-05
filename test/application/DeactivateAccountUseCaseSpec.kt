@@ -4,6 +4,7 @@ import com.puregoldbe.ibms.application.usecase.DeactivateAccountUseCase
 import com.puregoldbe.ibms.domain.error.DomainError
 import com.puregoldbe.ibms.domain.model.Account
 import com.puregoldbe.ibms.domain.model.AccountStatus
+import com.puregoldbe.ibms.domain.model.AttachmentPurpose
 import com.puregoldbe.ibms.domain.port.AccountRepository
 import com.puregoldbe.ibms.domain.port.ActivityRecorder
 import com.puregoldbe.ibms.domain.port.AttachmentRepository
@@ -68,11 +69,11 @@ class DeactivateAccountUseCaseSpec : BehaviorSpec({
     Given("an active account") {
         val account = activeAccount()
         every { accounts.findById("acc-1") } returns account
-        every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1")
+        every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1", AttachmentPurpose.DEACTIVATION_PROOF)
         every { accounts.markTerminationRequested("acc-1", any()) } returns terminationRequestedAccount()
 
         When("deactivating with valid proof") {
-            val result = useCase("acc-1", "proof-1", "actor-1")
+            val result = useCase("acc-1", listOf("proof-1"), "actor-1")
             Then("status becomes TERMINATION_REQUESTED and graceEndDate is set") {
                 result.status shouldBe AccountStatus.TERMINATION_REQUESTED
                 result.graceEndDate shouldNotBe null
@@ -83,12 +84,12 @@ class DeactivateAccountUseCaseSpec : BehaviorSpec({
 
     Given("a non-active account (TERMINATION_REQUESTED)") {
         every { accounts.findById("acc-1") } returns terminationRequestedAccount()
-        every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1")
+        every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1", AttachmentPurpose.DEACTIVATION_PROOF)
 
         When("deactivating") {
             Then("throws Conflict") {
                 shouldThrow<DomainError.Conflict> {
-                    useCase("acc-1", "proof-1", "actor-1")
+                    useCase("acc-1", listOf("proof-1"), "actor-1")
                 }
             }
         }
@@ -96,12 +97,12 @@ class DeactivateAccountUseCaseSpec : BehaviorSpec({
 
     Given("a transferred account") {
         every { accounts.findById("acc-1") } returns transferredAccount()
-        every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1")
+        every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1", AttachmentPurpose.DEACTIVATION_PROOF)
 
         When("deactivating") {
             Then("throws Conflict") {
                 shouldThrow<DomainError.Conflict> {
-                    useCase("acc-1", "proof-1", "actor-1")
+                    useCase("acc-1", listOf("proof-1"), "actor-1")
                 }
             }
         }
@@ -109,12 +110,12 @@ class DeactivateAccountUseCaseSpec : BehaviorSpec({
 
     Given("an inactive account") {
         every { accounts.findById("acc-1") } returns inactiveAccount()
-        every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1")
+        every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1", AttachmentPurpose.DEACTIVATION_PROOF)
 
         When("deactivating") {
             Then("throws Conflict") {
                 shouldThrow<DomainError.Conflict> {
-                    useCase("acc-1", "proof-1", "actor-1")
+                    useCase("acc-1", listOf("proof-1"), "actor-1")
                 }
             }
         }
@@ -123,13 +124,100 @@ class DeactivateAccountUseCaseSpec : BehaviorSpec({
     Given("valid deactivation with proof linking") {
         val account = activeAccount()
         every { accounts.findById("acc-1") } returns account
-        every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1")
+        every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1", AttachmentPurpose.DEACTIVATION_PROOF)
         every { accounts.markTerminationRequested("acc-1", any()) } returns terminationRequestedAccount()
 
         When("deactivating") {
-            useCase("acc-1", "proof-1", "actor-1")
-            Then("proof is linked to account via linkProof()") {
-                verify(exactly = 1) { accounts.linkProof("acc-1", "proof-1") }
+            useCase("acc-1", listOf("proof-1"), "actor-1")
+            Then("proof is linked to account tagged as a deactivation proof") {
+                verify(exactly = 1) {
+                    accounts.linkProofs("acc-1", listOf("proof-1"), AttachmentPurpose.DEACTIVATION_PROOF, "actor-1", null)
+                }
+            }
+        }
+    }
+
+    Given("a deactivation carrying the maximum three proofs") {
+        every { accounts.findById("acc-1") } returns activeAccount()
+        listOf("proof-1", "proof-2", "proof-3").forEach {
+            every { attachments.findById(it) } returns uploadedPdfAttachment(it, AttachmentPurpose.DEACTIVATION_PROOF)
+        }
+        every { accounts.markTerminationRequested("acc-1", any()) } returns terminationRequestedAccount()
+
+        When("deactivating") {
+            useCase("acc-1", listOf("proof-1", "proof-2", "proof-3"), "actor-1")
+            Then("all three link in a single call, preserving order") {
+                verify(exactly = 1) {
+                    accounts.linkProofs(
+                        "acc-1",
+                        listOf("proof-1", "proof-2", "proof-3"),
+                        AttachmentPurpose.DEACTIVATION_PROOF,
+                        "actor-1",
+                        null,
+                    )
+                }
+            }
+            Then("each proof is stamped with the owning account") {
+                listOf("proof-1", "proof-2", "proof-3").forEach {
+                    verify(exactly = 1) { attachments.linkEntity(it, "account", "acc-1") }
+                }
+            }
+        }
+    }
+
+    Given("a deactivation carrying four proofs") {
+        every { accounts.findById("acc-1") } returns activeAccount()
+        (1..4).forEach {
+            every { attachments.findById("proof-$it") } returns
+                uploadedPdfAttachment("proof-$it", AttachmentPurpose.DEACTIVATION_PROOF)
+        }
+
+        When("deactivating") {
+            Then("throws Validation naming the cap") {
+                val error = shouldThrow<DomainError.Validation> {
+                    useCase("acc-1", listOf("proof-1", "proof-2", "proof-3", "proof-4"), "actor-1")
+                }
+                error.message shouldBe "at most 3 files may be attached to deactivation proof"
+            }
+        }
+    }
+
+    Given("a deactivation with no proofs at all") {
+        every { accounts.findById("acc-1") } returns activeAccount()
+
+        When("deactivating") {
+            Then("throws Validation") {
+                shouldThrow<DomainError.Validation> { useCase("acc-1", emptyList(), "actor-1") }
+            }
+        }
+    }
+
+    Given("a deactivation repeating the same proof") {
+        every { accounts.findById("acc-1") } returns activeAccount()
+        every { attachments.findById("proof-1") } returns
+            uploadedPdfAttachment("proof-1", AttachmentPurpose.DEACTIVATION_PROOF)
+
+        When("deactivating") {
+            Then("throws Validation") {
+                val error = shouldThrow<DomainError.Validation> {
+                    useCase("acc-1", listOf("proof-1", "proof-1"), "actor-1")
+                }
+                error.message shouldBe "deactivation proof contains duplicate attachment ids"
+            }
+        }
+    }
+
+    Given("a deactivation whose proof is a subscription proof") {
+        every { accounts.findById("acc-1") } returns activeAccount()
+        every { attachments.findById("sub-1") } returns
+            uploadedPdfAttachment("sub-1", AttachmentPurpose.SUBSCRIPTION_PROOF)
+
+        When("deactivating") {
+            Then("throws Validation — the purpose must match the activity") {
+                val error = shouldThrow<DomainError.Validation> {
+                    useCase("acc-1", listOf("sub-1"), "actor-1")
+                }
+                error.message shouldBe "deactivation proof must reference a deactivation_proof attachment"
             }
         }
     }
@@ -137,11 +225,11 @@ class DeactivateAccountUseCaseSpec : BehaviorSpec({
     Given("valid deactivation with activity recording") {
         val account = activeAccount()
         every { accounts.findById("acc-1") } returns account
-        every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1")
+        every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1", AttachmentPurpose.DEACTIVATION_PROOF)
         every { accounts.markTerminationRequested("acc-1", any()) } returns terminationRequestedAccount()
 
         When("deactivating") {
-            useCase("acc-1", "proof-1", "actor-1")
+            useCase("acc-1", listOf("proof-1"), "actor-1")
             Then("activity is recorded with correct action") {
                 verify(exactly = 1) {
                     activity.record("actor-1", "account.deactivation_requested", "account", "acc-1")
@@ -158,7 +246,7 @@ class DeactivateAccountUseCaseSpec : BehaviorSpec({
         When("deactivating") {
             Then("throws Validation error") {
                 shouldThrow<DomainError.Validation> {
-                    useCase("acc-1", "bad-proof", "actor-1")
+                    useCase("acc-1", listOf("bad-proof"), "actor-1")
                 }
             }
         }
@@ -170,7 +258,7 @@ class DeactivateAccountUseCaseSpec : BehaviorSpec({
         When("deactivating") {
             Then("throws NotFound") {
                 shouldThrow<DomainError.NotFound> {
-                    useCase("missing", "proof-1", "actor-1")
+                    useCase("missing", listOf("proof-1"), "actor-1")
                 }
             }
         }
@@ -179,16 +267,16 @@ class DeactivateAccountUseCaseSpec : BehaviorSpec({
     Given("idempotency key with same request sent twice") {
         val account = activeAccount()
         every { accounts.findById("acc-1") } returns account
-        every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1")
+        every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1", AttachmentPurpose.DEACTIVATION_PROOF)
         every { accounts.markTerminationRequested("acc-1", any()) } returns terminationRequestedAccount()
 
         val idem = IdempotencyContext(key = "idem-key-1", requestHash = "hash-abc", userId = "actor-1")
 
         When("same request sent twice") {
-            val first = useCase("acc-1", "proof-1", "actor-1", idem)
+            val first = useCase("acc-1", listOf("proof-1"), "actor-1", idem)
             // Second call: account is now in TERMINATION_REQUESTED but idempotency replays
             every { accounts.findById("acc-1") } returns terminationRequestedAccount()
-            val second = useCase("acc-1", "proof-1", "actor-1", idem)
+            val second = useCase("acc-1", listOf("proof-1"), "actor-1", idem)
 
             Then("returns same result (replay)") {
                 second.id shouldBe first.id
@@ -200,18 +288,18 @@ class DeactivateAccountUseCaseSpec : BehaviorSpec({
     Given("idempotency key with different request body") {
         val account = activeAccount()
         every { accounts.findById("acc-1") } returns account
-        every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1")
-        every { attachments.findById("proof-2") } returns uploadedPdfAttachment("proof-2")
+        every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1", AttachmentPurpose.DEACTIVATION_PROOF)
+        every { attachments.findById("proof-2") } returns uploadedPdfAttachment("proof-2", AttachmentPurpose.DEACTIVATION_PROOF)
         every { accounts.markTerminationRequested("acc-1", any()) } returns terminationRequestedAccount()
 
         val idem1 = IdempotencyContext(key = "idem-key-2", requestHash = "hash-original", userId = "actor-1")
         val idem2 = IdempotencyContext(key = "idem-key-2", requestHash = "hash-different", userId = "actor-1")
 
         When("different request body sent with same key") {
-            useCase("acc-1", "proof-1", "actor-1", idem1)
+            useCase("acc-1", listOf("proof-1"), "actor-1", idem1)
             Then("throws Conflict") {
                 shouldThrow<DomainError.Conflict> {
-                    useCase("acc-1", "proof-2", "actor-1", idem2)
+                    useCase("acc-1", listOf("proof-2"), "actor-1", idem2)
                 }
             }
         }

@@ -255,7 +255,7 @@ Response **200**: Returns the updated AccountChangeRequest object with `status="
 2. **Approval applies immediately**: When a manager approves a request, the proposed changes are written to the account record right away:
    - **Field changes**: Only the non-null proposed fields overwrite the current account values. Fields left null in the request are untouched.
    - **Rate change (MRC)**: The new rate takes effect immediately on the account. The next topsheet compilation uses the updated rate. If a topsheet was already compiled for the current billing period, it remains unchanged.
-   - **Proof attachment**: If `proofAttachmentId` is provided, the attachment is appended to the account's `subscriptionProofIds` list (via the existing `account_attachments` junction table). The list is **additive only** — existing proofs are preserved and cannot be removed through a change request.
+   - **Proof attachment**: If `proofAttachmentId` is provided, the attachment is linked to the account as a `subscription_proof` on approval, and appears in both `subscriptionProofIds` and `GET /accounts/{id}/attachments?purpose=subscription_proof`. The list is **additive only** — existing proofs are preserved and cannot be removed through a change request. (Builds before V23 accepted and stored the id on the request but silently dropped it at approval time; it is now actually linked.)
 3. **What cannot be changed**: The following fields are intentionally excluded from change requests:
    - **`storeId`** — moving an account between stores is handled by the dedicated transfer flow (`POST /transfers`), which has its own proof and audit trail.
    - **Removing proofs** — `subscriptionProofIds` is additive only. Existing proofs cannot be removed via a change request.

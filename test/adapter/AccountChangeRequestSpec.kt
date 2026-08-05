@@ -36,16 +36,13 @@ class AccountChangeRequestSpec : BehaviorSpec({
         val accountNumber: String,
     )
 
-    /** Create a subscription-proof attachment via the presign flow; returns the attachment id. */
-    suspend fun ApplicationTestBuilder.createAttachment(token: String): String {
-        val res = client.post("/attachments/presign/upload") {
-            header(HttpHeaders.Authorization, "Bearer $token")
-            contentType(ContentType.Application.Json)
-            setBody("""{"fileName":"proof.txt","contentType":"text/plain","purpose":"subscription_proof"}""")
-        }
-        res.status shouldBe HttpStatusCode.OK
-        return res.bodyAsText().asJson().data().str("attachmentId")
-    }
+    /**
+     * A fully-uploaded subscription-proof PDF; returns the attachment id. Presigning a
+     * proof purpose as text/plain is rejected up front now, and the approval path links
+     * the proof for real, so this has to be a genuine PDF.
+     */
+    suspend fun ApplicationTestBuilder.createAttachment(token: String): String =
+        uploadPdfProof(token, "subscription_proof", "proof.pdf")
 
     /** Full prerequisite chain: provider → attachment → store → active account. */
     suspend fun ApplicationTestBuilder.setupActiveAccount(token: String): AccountSetup {

@@ -7,6 +7,7 @@ import com.puregoldbe.ibms.application.usecase.CreateAccountUseCase
 import com.puregoldbe.ibms.application.usecase.CreateISPAccountUseCase
 import com.puregoldbe.ibms.application.usecase.DeactivateAccountUseCase
 import com.puregoldbe.ibms.application.usecase.GetAccountUseCase
+import com.puregoldbe.ibms.application.usecase.ListAccountProofsUseCase
 import com.puregoldbe.ibms.application.usecase.ListAccountsUseCase
 import com.puregoldbe.ibms.application.usecase.TransferAccountUseCase
 import com.puregoldbe.ibms.application.usecase.UpdateAccountUseCase
@@ -17,6 +18,7 @@ import com.puregoldbe.ibms.domain.model.CreateISPAccountInput
 import com.puregoldbe.ibms.domain.model.DeactivateAccountRequest
 import com.puregoldbe.ibms.domain.model.TransferAccountRequest
 import com.puregoldbe.ibms.domain.model.UserRole
+import com.puregoldbe.ibms.domain.service.PdfProofPolicy
 import io.ktor.http.*
 import io.ktor.http.content.*
 import io.ktor.server.request.*
@@ -38,6 +40,7 @@ fun Route.accountRoutes(
     cancelDeactivation: CancelDeactivationUseCase,
     bulkImport: BulkImportAccountsUseCase,
     createISPAccount: CreateISPAccountUseCase,
+    listAccountProofs: ListAccountProofsUseCase,
 ) {
     route("/accounts") {
         get {
@@ -86,13 +89,22 @@ fun Route.accountRoutes(
         post("/{id}/transfer") {
             val caller = call.authorize(UserRole.SECRETARY)
             val req = call.receive<TransferAccountRequest>()
-            call.created(transferAccount(call.pathId(), req.newStoreId, req.proofId, caller.userId))
+            val proofIds = PdfProofPolicy.mergeProofIds(req.proofId, req.proofIds)
+            call.created(transferAccount(call.pathId(), req.newStoreId, proofIds, caller.userId))
         }
         post("/{id}/deactivate") {
             val caller = call.authorize(UserRole.SECRETARY)
             val req = call.receive<DeactivateAccountRequest>()
             val idem = call.idempotencyContext(caller.userId, Json.encodeToString(req))
-            call.ok(deactivateAccount(call.pathId(), req.proofId, caller.userId, idem))
+            val proofIds = PdfProofPolicy.mergeProofIds(req.proofId, req.proofIds)
+            call.ok(deactivateAccount(call.pathId(), proofIds, caller.userId, idem))
+        }
+        // Every proof ever attached to this account, newest activity first. A plain list,
+        // not a CursorPage: an activity carries at most PdfProofPolicy.MAX_PROOFS files.
+        get("/{id}/attachments") {
+            call.authorize()
+            val purpose = parseAttachmentPurpose(call.request.queryParameters["purpose"])
+            call.ok(listAccountProofs(call.pathId(), purpose))
         }
         post("/{id}/cancel-deactivation") {
             val caller = call.authorize(UserRole.SECRETARY)

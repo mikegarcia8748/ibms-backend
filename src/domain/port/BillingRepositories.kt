@@ -115,6 +115,8 @@ interface TopSheetRepository {
 }
 
 interface TransferRepository {
+    fun findById(id: String): TransferRecord?
+
     fun create(
         oldStoreId: String,
         newStoreId: String,

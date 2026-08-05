@@ -3,6 +3,7 @@ package com.puregoldbe.ibms.application.usecase
 import com.puregoldbe.ibms.domain.error.DomainError
 import com.puregoldbe.ibms.domain.model.Account
 import com.puregoldbe.ibms.domain.model.AccountUpsertRequest
+import com.puregoldbe.ibms.domain.model.AttachmentPurpose
 import com.puregoldbe.ibms.domain.model.CreateISPAccountInput
 import com.puregoldbe.ibms.domain.port.AttachmentRepository
 import com.puregoldbe.ibms.domain.port.Clock
@@ -38,11 +39,17 @@ class CreateISPAccountUseCase(
                 throw DomainError.Validation("installationDate cannot be in the future")
             }
 
-            if (input.subscriptionProofId.isBlank()) throw DomainError.Validation("subscriptionProofId is required")
-            PdfProofPolicy.requireUploadedPdf(
-                attachments.findById(input.subscriptionProofId),
-                "subscriptionProofId",
-            )
+            // 1..3 proofs. The scalar field is the deprecated single-proof form; when it
+            // is the one in use, errors still name it so existing clients read the same
+            // messages they always did.
+            val legacyScalar = input.subscriptionProofIds.isEmpty()
+            val proofIds = PdfProofPolicy.mergeProofIds(input.subscriptionProofId, input.subscriptionProofIds)
+            if (proofIds.isEmpty()) throw DomainError.Validation("subscriptionProofId is required")
+            PdfProofPolicy.requireProofSet(
+                proofIds,
+                AttachmentPurpose.SUBSCRIPTION_PROOF,
+                field = if (legacyScalar) "subscriptionProofId" else "subscriptionProofIds",
+            ) { attachments.findById(it) }
 
             // --- Compute proration flag ---
             val provider = providers.findById(input.providerId)
@@ -56,7 +63,7 @@ class CreateISPAccountUseCase(
                 storeId = input.storeId,
                 rate = input.rate,
                 installationDate = input.installationDate,
-                subscriptionProofIds = listOf(input.subscriptionProofId),
+                subscriptionProofIds = proofIds,
                 isProrated = prorated,
             )
         }
