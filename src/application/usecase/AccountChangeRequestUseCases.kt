@@ -6,6 +6,7 @@ import com.puregoldbe.ibms.domain.model.AccountChangeRequestStatus
 import com.puregoldbe.ibms.domain.model.AccountChangeRequestWithDiff
 import com.puregoldbe.ibms.domain.model.AccountStatus
 import com.puregoldbe.ibms.domain.model.AccountUpsertRequest
+import com.puregoldbe.ibms.domain.model.AttachmentPurpose
 import com.puregoldbe.ibms.domain.model.CursorPage
 import com.puregoldbe.ibms.domain.model.FieldDiff
 import com.puregoldbe.ibms.domain.model.NotificationContext
@@ -145,11 +146,7 @@ class ApproveAccountChangeRequestUseCase(
             rate = request.rateNew ?: account.rate,
             installationDate = request.installationDateNew ?: account.installationDate,
             billingPeriodLabel = account.billingPeriodLabel,
-            subscriptionProofIds = if (request.proofAttachmentId != null) {
-                (account.subscriptionProofIds + request.proofAttachmentId).distinct()
-            } else {
-                account.subscriptionProofIds
-            },
+            subscriptionProofIds = account.subscriptionProofIds,
         )
 
         if (request.accountNumberNew != null || request.providerIdNew != null) {
@@ -165,6 +162,19 @@ class ApproveAccountChangeRequestUseCase(
 
         accounts.update(request.accountId, updateReq)
             ?: throw DomainError.NotFound("account ${request.accountId} not found")
+
+        // accounts.update writes only Accounts columns — it never touches the proof link
+        // table. Passing the proof through AccountUpsertRequest silently dropped it, so
+        // link it explicitly. It joins the account's subscription proofs as its own
+        // single-proof activity (distinct linked_at).
+        if (request.proofAttachmentId != null) {
+            accounts.linkProofs(
+                request.accountId,
+                listOf(request.proofAttachmentId),
+                AttachmentPurpose.SUBSCRIPTION_PROOF,
+                approverId,
+            )
+        }
 
         val approved = requests.approve(requestId, approverId, clock.now())
             ?: throw DomainError.NotFound("change request $requestId not found")

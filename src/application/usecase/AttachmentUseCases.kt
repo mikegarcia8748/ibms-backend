@@ -1,12 +1,17 @@
 package com.puregoldbe.ibms.application.usecase
 
 import com.puregoldbe.ibms.domain.error.DomainError
+import com.puregoldbe.ibms.domain.model.AccountProof
+import com.puregoldbe.ibms.domain.model.AccountProofLink
+import com.puregoldbe.ibms.domain.model.Attachment
 import com.puregoldbe.ibms.domain.model.AttachmentPurpose
+import com.puregoldbe.ibms.domain.port.AccountRepository
 import com.puregoldbe.ibms.domain.port.AttachmentRepository
 import com.puregoldbe.ibms.domain.port.PresignOp
 import com.puregoldbe.ibms.domain.port.PresignPort
 import com.puregoldbe.ibms.domain.port.StoragePort
 import com.puregoldbe.ibms.domain.port.TransactionRunner
+import com.puregoldbe.ibms.domain.port.TransferRepository
 import com.puregoldbe.ibms.domain.service.PdfProofPolicy
 import java.util.UUID
 
@@ -28,10 +33,22 @@ class PresignUploadUseCase(
         contentType: String?,
         uploadedBy: String?,
     ): Presigned {
+        // Fail a proof upload here rather than after the client has pushed 10 MB.
+        if (purpose in PdfProofPolicy.PROOF_PURPOSES &&
+            contentType != null &&
+            !contentType.equals(PdfProofPolicy.CONTENT_TYPE, ignoreCase = true)
+        ) {
+            throw DomainError.Validation(
+                "a ${purpose.name.lowercase()} must be uploaded as ${PdfProofPolicy.CONTENT_TYPE}",
+            )
+        }
         val safeName = fileName?.replace(Regex("[^A-Za-z0-9._-]"), "_")?.takeIf { it.isNotBlank() } ?: "file"
         val key = "${purpose.name.lowercase()}/${UUID.randomUUID()}-$safeName"
+        // Keep the raw name too: the sanitizer above destroys spaces and non-ASCII, and
+        // the client needs the original back to label the proof.
+        val originalName = fileName?.trim()?.take(255)?.takeIf { it.isNotBlank() }
         val att = tx.inTransaction {
-            attachments.create(purpose, null, null, key, contentType, null, uploadedBy)
+            attachments.create(purpose, null, null, key, contentType, null, uploadedBy, originalName)
         }
         return Presigned(att.id, presign.presignedUrl(att.id, PresignOp.UPLOAD))
     }
@@ -78,6 +95,63 @@ class StoreBlobUseCase(
         if (isProof) {
             tx.inTransaction { attachments.markUploaded(id, bytes.size.toLong(), PdfProofPolicy.CONTENT_TYPE) }
         }
+    }
+}
+
+/**
+ * An account's proofs with the metadata a client needs to label them, newest activity
+ * first. Download URLs are minted outside the transaction, like [PresignDownloadUseCase].
+ */
+class ListAccountProofsUseCase(
+    private val accounts: AccountRepository,
+    private val attachments: AttachmentRepository,
+    private val presign: PresignPort,
+    private val tx: TransactionRunner,
+) {
+    suspend operator fun invoke(accountId: String, purpose: AttachmentPurpose? = null): List<AccountProof> {
+        val links = tx.inTransaction {
+            accounts.findById(accountId) ?: throw DomainError.NotFound("account $accountId not found")
+            val links = accounts.listProofs(accountId, purpose)
+            links to attachments.findAllById(links.map { it.attachmentId }).associateBy { it.id }
+        }
+        return links.toProofs(presign)
+    }
+}
+
+/** The proofs of one transfer, deduplicated across its source and destination account. */
+class ListTransferProofsUseCase(
+    private val transfers: TransferRepository,
+    private val accounts: AccountRepository,
+    private val attachments: AttachmentRepository,
+    private val presign: PresignPort,
+    private val tx: TransactionRunner,
+) {
+    suspend operator fun invoke(transferId: String): List<AccountProof> {
+        val links = tx.inTransaction {
+            transfers.findById(transferId) ?: throw DomainError.NotFound("transfer $transferId not found")
+            val links = accounts.listProofsByTransfer(transferId).distinctBy { it.attachmentId }
+            links to attachments.findAllById(links.map { it.attachmentId }).associateBy { it.id }
+        }
+        return links.toProofs(presign)
+    }
+}
+
+private fun Pair<List<AccountProofLink>, Map<String, Attachment>>.toProofs(presign: PresignPort): List<AccountProof> {
+    val (links, byId) = this
+    return links.map { link ->
+        val att = byId[link.attachmentId]
+        AccountProof(
+            attachmentId = link.attachmentId,
+            purpose = link.purpose,
+            fileName = att?.fileName,
+            contentType = att?.contentType,
+            sizeBytes = att?.sizeBytes,
+            sortOrder = link.sortOrder,
+            linkedAt = link.linkedAt,
+            linkedBy = link.linkedBy,
+            transferId = link.transferId,
+            downloadUrl = presign.presignedUrl(link.attachmentId, PresignOp.DOWNLOAD),
+        )
     }
 }
 

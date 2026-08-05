@@ -99,6 +99,10 @@ interface InvoiceSequenceRepository {
 
 interface AttachmentRepository {
     fun findById(id: String): Attachment?
+
+    /** Bulk lookup for the proof-list endpoints; order is unspecified. */
+    fun findAllById(ids: List<String>): List<Attachment>
+
     fun exists(id: String): Boolean
     fun create(
         purpose: AttachmentPurpose,
@@ -108,10 +112,18 @@ interface AttachmentRepository {
         contentType: String?,
         sizeBytes: Long?,
         uploadedBy: String?,
+        fileName: String? = null,
     ): Attachment
 
     /** Stamp the row once bytes are actually stored: records the true size + content type. */
     fun markUploaded(id: String, sizeBytes: Long, contentType: String)
+
+    /**
+     * Stamp the owning entity once the activity claiming this file commits. A
+     * denormalized hint for `idx_attachments_entity` and download scoping — the
+     * authoritative link is `account_attachments` (see [AccountRepository.linkProofs]).
+     */
+    fun linkEntity(id: String, entityType: String, entityId: String)
 }
 
 interface StoreRepository {
@@ -175,8 +187,26 @@ interface AccountRepository {
     /** Start the 30-day grace window: status -> termination_requested, timestamp set. */
     fun markTerminationRequested(id: String, at: Instant): Account?
 
-    /** Link a proof attachment to an existing account (deactivation proof). */
-    fun linkProof(accountId: String, proofId: String)
+    /**
+     * Attach [attachmentIds] as the proofs of ONE activity: they share a `linked_at`
+     * (the transaction timestamp), carry their request order in `sort_order`, and are
+     * tagged [purpose] so a deactivation proof can never be read back as a
+     * subscription proof. [transferId] is set only for TRANSFER_PROOF. Already-linked
+     * pairs are ignored rather than failing.
+     */
+    fun linkProofs(
+        accountId: String,
+        attachmentIds: List<String>,
+        purpose: AttachmentPurpose,
+        linkedBy: String?,
+        transferId: String? = null,
+    )
+
+    /** An account's proof links, newest activity first ([purpose] filters when non-null). */
+    fun listProofs(accountId: String, purpose: AttachmentPurpose? = null): List<AccountProofLink>
+
+    /** The links of one transfer, across both the source and destination account. */
+    fun listProofsByTransfer(transferId: String): List<AccountProofLink>
 
     /** Revert deactivation: status -> ACTIVE, clear terminationRequestedAt. */
     fun cancelTerminationRequested(id: String): Account?

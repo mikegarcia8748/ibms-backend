@@ -10,6 +10,7 @@ import com.puregoldbe.ibms.domain.model.AttachmentPurpose
 import com.puregoldbe.ibms.domain.model.PresignDownloadResponse
 import com.puregoldbe.ibms.domain.model.PresignUploadRequest
 import com.puregoldbe.ibms.domain.model.PresignUploadResponse
+import com.puregoldbe.ibms.domain.service.PdfProofPolicy
 import io.ktor.http.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
@@ -52,6 +53,13 @@ fun Route.attachmentBlobRoutes(
     route("/attachments/{id}/blob") {
         put {
             val token = call.request.queryParameters["token"] ?: throw DomainError.Validation("missing token")
+            // Reject an oversized body from the header, before receive() buffers the whole
+            // thing into a ByteArray. StoreBlobUseCase re-checks the actual bytes, since
+            // Content-Length is client-supplied.
+            val declared = call.request.contentLength()
+            if (declared != null && declared > PdfProofPolicy.MAX_BYTES) {
+                throw DomainError.Validation("PDF exceeds the ${PdfProofPolicy.MAX_BYTES / (1024 * 1024)} MB limit")
+            }
             val bytes = call.receive<ByteArray>()
             storeBlob(call.pathId(), token, bytes)
             call.okEmpty("Upload complete!")

@@ -15,10 +15,44 @@ data class Attachment(
     val entityType: String? = null,
     val entityId: String? = null,
     val storageKey: String,
+    /** Original client-supplied name. [storageKey] carries only a sanitized copy. */
+    val fileName: String? = null,
     val contentType: String? = null,
     val sizeBytes: Long? = null,
     val uploadedBy: String? = null,
     val createdAt: Instant,
+)
+
+/**
+ * One proof of one account activity, carrying everything a client needs to label it
+ * and fetch it. [purpose] is the purpose of the ACTIVITY that attached the file.
+ * Proofs sharing a [linkedAt] belong to the same activity — that is how a client
+ * groups "the 2 PDFs from this deactivation request".
+ */
+@Serializable
+data class AccountProof(
+    val attachmentId: String,
+    val purpose: AttachmentPurpose,
+    val fileName: String? = null,
+    val contentType: String? = null,
+    val sizeBytes: Long? = null,
+    val sortOrder: Int,
+    val linkedAt: Instant,
+    val linkedBy: String? = null,
+    val transferId: String? = null,
+    /** Short-lived signed GET URL; clients must fetch it fresh rather than cache it. */
+    val downloadUrl: String,
+)
+
+/** The raw `account_attachments` link row backing [AccountProof]. */
+data class AccountProofLink(
+    val accountId: String,
+    val attachmentId: String,
+    val purpose: AttachmentPurpose,
+    val sortOrder: Int,
+    val linkedAt: Instant,
+    val linkedBy: String? = null,
+    val transferId: String? = null,
 )
 
 /**

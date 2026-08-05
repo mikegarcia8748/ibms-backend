@@ -235,7 +235,10 @@ data class TransferRecord(
     val newStoreId: String,
     val oldAccountId: String,
     val newAccountId: String,
+    /** The first proof; retained for clients written before [proofIds] existed. */
     val proofId: String? = null,
+    /** Every proof attached to this transfer, in the order they were submitted. */
+    val proofIds: List<String> = emptyList(),
     val requestedById: String,
     val transferDate: Instant,
 )
@@ -389,6 +392,12 @@ data class AccountUpsertRequest(
     val isProrated: Boolean = false,
 )
 
+/**
+ * Every activity that requires proof accepts 1..[com.puregoldbe.ibms.domain.service.PdfProofPolicy.MAX_PROOFS]
+ * PDFs in a `proofIds` array. The singular `proofId` / `subscriptionProofId` fields are
+ * the deprecated single-proof form, kept so existing clients keep working; the array
+ * wins when both are sent.
+ */
 @Serializable
 data class CreateISPAccountInput(
     val accountNumber: String,
@@ -397,18 +406,31 @@ data class CreateISPAccountInput(
     val storeId: String,
     val rate: Money,
     val installationDate: LocalDate,
-    val subscriptionProofId: String,
+    val subscriptionProofId: String? = null,
+    val subscriptionProofIds: List<String> = emptyList(),
 )
 
 @Serializable
-data class TransferAccountRequest(val newStoreId: String, val proofId: String)
+data class TransferAccountRequest(
+    val newStoreId: String,
+    val proofId: String? = null,
+    val proofIds: List<String> = emptyList(),
+)
 
 /** Body for the top-level POST /transfers (carries the account id in the payload). */
 @Serializable
-data class TransferCreateRequest(val accountId: String, val newStoreId: String, val proofId: String)
+data class TransferCreateRequest(
+    val accountId: String,
+    val newStoreId: String,
+    val proofId: String? = null,
+    val proofIds: List<String> = emptyList(),
+)
 
 @Serializable
-data class DeactivateAccountRequest(val proofId: String)
+data class DeactivateAccountRequest(
+    val proofId: String? = null,
+    val proofIds: List<String> = emptyList(),
+)
 
 /** Body for both /topsheets/preview and /topsheets/compile. */
 @Serializable

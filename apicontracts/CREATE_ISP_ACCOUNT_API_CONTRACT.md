@@ -18,7 +18,7 @@ Before calling this endpoint, the subscription proof PDF must be uploaded:
    - Body: raw file bytes
    - Response 200: `{"data": {"id": "uuid-attachment", "storedAt": "..."}}`
 
-The `attachmentId` from step 1 becomes the `subscriptionProofId` in the create request.
+The `attachmentId` from step 1 goes into the `subscriptionProofIds` array in the create request. Repeat steps 1-2 for each file — **1 to 3 PDFs** may be attached. See [ACCOUNT_ACTIVITY_PROOFS_API_CONTRACT.md](ACCOUNT_ACTIVITY_PROOFS_API_CONTRACT.md) for the full upload flow.
 
 ---
 
@@ -45,7 +45,8 @@ The `attachmentId` from step 1 becomes the `subscriptionProofId` in the create r
 | `storeId` | `string (UUID)` | **Yes** | References an existing store. |
 | `rate` | `string (2dp decimal)` | **Yes** | Monthly Recurring Charge. Must be > 0. Example: `"2500.00"` |
 | `installationDate` | `string (ISO date)` | **Yes** | Account installation/start date. Cannot be in the future. Format: `"YYYY-MM-DD"` |
-| `subscriptionProofId` | `string (UUID)` | **Yes** | References a previously uploaded attachment (subscription proof PDF). Must exist. |
+| `subscriptionProofIds` | `string[] (UUID)` | **Yes** | 1 to 3 previously uploaded subscription proof PDFs. Each must exist, be fully uploaded, be a PDF, and have been presigned with `purpose: "subscription_proof"`. Order is preserved. |
+| `subscriptionProofId` | `string (UUID)` | No | **Deprecated.** The single-proof form, still accepted. Ignored when `subscriptionProofIds` is present and non-empty. |
 
 ### Example Request
 
@@ -57,7 +58,10 @@ The `attachmentId` from step 1 becomes the `subscriptionProofId` in the create r
   "storeId": "660e8400-e29b-41d4-a716-446655440001",
   "rate": "2500.00",
   "installationDate": "2026-07-20",
-  "subscriptionProofId": "770e8400-e29b-41d4-a716-446655440002"
+  "subscriptionProofIds": [
+    "770e8400-e29b-41d4-a716-446655440002",
+    "880e8400-e29b-41d4-a716-446655440003"
+  ]
 }
 ```
 
@@ -135,8 +139,10 @@ The `isProrated` flag is auto-computed at creation:
 | `400` | circuitId blank/missing | `{"result":"error","message":"circuitId is required for ISP accounts","status":"400","data":null}` |
 | `400` | rate ≤ 0 or invalid | `{"result":"error","message":"rate (MRC) must be greater than 0","status":"400","data":null}` |
 | `400` | installationDate in future | `{"result":"error","message":"installationDate cannot be in the future","status":"400","data":null}` |
-| `400` | subscriptionProofId blank | `{"result":"error","message":"subscriptionProofId is required","status":"400","data":null}` |
-| `400` | subscriptionProofId not found | `{"result":"error","message":"subscription proof attachment not found","status":"400","data":null}` |
+| `400` | no subscription proof supplied | `{"result":"error","message":"subscriptionProofId is required","status":"400","data":null}` |
+| `400` | a proof is unknown, not yet uploaded, not a PDF, or not a `subscription_proof` | `{"result":"error","message":"a valid subscriptionProofIds is required","status":"400","data":null}` |
+| `400` | more than 3 proofs supplied | `{"result":"error","message":"at most 3 files may be attached to subscriptionProofIds","status":"400","data":null}` |
+| `400` | the same proof id twice | `{"result":"error","message":"subscriptionProofIds contains duplicate attachment ids","status":"400","data":null}` |
 | `400` | unknown providerId | `{"result":"error","message":"unknown providerId {id}","status":"400","data":null}` |
 | `400` | unknown storeId | `{"result":"error","message":"unknown storeId {id}","status":"400","data":null}` |
 | `409` | duplicate (provider, accountNumber) | `{"result":"error","message":"account ACC-12345 already exists for this provider","status":"409","code":"duplicate_account_number","data":null}` |
@@ -171,7 +177,7 @@ curl -X POST http://localhost:8080/accounts/isp \
     "storeId": "660e8400-e29b-41d4-a716-446655440001",
     "rate": "2500.00",
     "installationDate": "2026-07-20",
-    "subscriptionProofId": "770e8400-e29b-41d4-a716-446655440002"
+    "subscriptionProofIds": ["770e8400-e29b-41d4-a716-446655440002"]
   }'
 ```
 
@@ -213,7 +219,7 @@ const createRes = await fetch('/accounts/isp', {
     storeId: selectedStoreId,
     rate: '2500.00',
     installationDate: '2026-07-20',
-    subscriptionProofId: attachment.id,
+    subscriptionProofIds: attachments.map(a => a.id),   // 1 to 3
   }),
 });
 const { data: account } = await createRes.json();

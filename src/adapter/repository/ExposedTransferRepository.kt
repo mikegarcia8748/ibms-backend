@@ -1,5 +1,6 @@
 package com.puregoldbe.ibms.adapter.repository
 
+import com.puregoldbe.ibms.adapter.db.AccountAttachments
 import com.puregoldbe.ibms.adapter.db.Accounts
 import com.puregoldbe.ibms.adapter.db.Attachments
 import com.puregoldbe.ibms.adapter.db.Stores
@@ -11,6 +12,7 @@ import com.puregoldbe.ibms.adapter.db.kx
 import com.puregoldbe.ibms.adapter.db.jt
 import com.puregoldbe.ibms.adapter.db.toCursorPage
 import com.puregoldbe.ibms.adapter.db.toUuid
+import com.puregoldbe.ibms.adapter.db.toUuidOrNull
 import com.puregoldbe.ibms.domain.model.CursorPage
 import com.puregoldbe.ibms.domain.model.TransferRecord
 import com.puregoldbe.ibms.domain.port.TransferRepository
@@ -20,6 +22,14 @@ import org.jetbrains.exposed.v1.core.dao.id.EntityID
 import org.jetbrains.exposed.v1.jdbc.*
 
 class ExposedTransferRepository : TransferRepository {
+
+    override fun findById(id: String): TransferRecord? {
+        val uuid = id.toUuidOrNull() ?: return null
+        return Transfers.selectAll().where { Transfers.id eq uuid }
+            .map { it.toTransfer() }
+            .singleOrNull()
+            ?.let { it.copy(proofIds = proofIdsFor(listOf(it.id))[it.id].orEmpty()) }
+    }
 
     override fun create(
         oldStoreId: String,
@@ -40,11 +50,12 @@ class ExposedTransferRepository : TransferRepository {
             row[Transfers.transferDate] = at.jt()
         }.value
         return Transfers.selectAll().where { Transfers.id eq id }.map { it.toTransfer() }.single()
+            .let { it.copy(proofIds = proofIdsFor(listOf(it.id))[it.id].orEmpty()) }
     }
 
     override fun page(accountId: String?, cursor: String?, limit: Int): CursorPage<TransferRecord> {
         val anchor = Transfers.keysetAnchor(Transfers.createdAt, cursor)
-        return Transfers.selectAll()
+        val page = Transfers.selectAll()
             .apply {
                 if (accountId != null) {
                     val a = accountId.toUuid()
@@ -56,6 +67,25 @@ class ExposedTransferRepository : TransferRepository {
             .limit(limit + 1)
             .map { it.toTransfer() }
             .toCursorPage(limit) { it.id }
+        // One extra query for the whole page rather than one per row.
+        val proofs = proofIdsFor(page.items.map { it.id })
+        return page.copy(items = page.items.map { it.copy(proofIds = proofs[it.id].orEmpty()) })
+    }
+
+    /**
+     * Transfer proofs live on `account_attachments` (linked to both accounts), so a
+     * transfer's set is deduplicated by attachment and ordered by slot.
+     */
+    private fun proofIdsFor(transferIds: List<String>): Map<String, List<String>> {
+        if (transferIds.isEmpty()) return emptyMap()
+        val uuids = transferIds.map { it.toUuid() }
+        return AccountAttachments.selectAll()
+            .where { AccountAttachments.transferId inList uuids }
+            .orderBy(AccountAttachments.sortOrder to SortOrder.ASC)
+            .groupBy({ it[AccountAttachments.transferId]!!.value.toString() }) {
+                it[AccountAttachments.attachmentId].value.toString()
+            }
+            .mapValues { (_, ids) -> ids.distinct() }
     }
 
     private fun ResultRow.toTransfer() = TransferRecord(

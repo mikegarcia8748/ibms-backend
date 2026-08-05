@@ -49,13 +49,19 @@ Body:
 
 ```json
 {
-  "proofId": "uuid-of-deactivation-proof-attachment"
+  "proofIds": [
+    "uuid-of-deactivation-proof-1",
+    "uuid-of-deactivation-proof-2"
+  ]
 }
 ```
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `proofId` | `string (UUID)` | **Yes** | UUID of a previously uploaded deactivation proof attachment. |
+| `proofIds` | `string[] (UUID)` | **Yes** | 1 to 3 previously uploaded deactivation proof attachments. Each must exist, be fully uploaded, be a PDF, and have been presigned with `purpose: "deactivation_proof"`. Order is preserved. |
+| `proofId` | `string (UUID)` | No | **Deprecated.** The single-proof form, still accepted. Ignored when `proofIds` is present and non-empty. |
+
+See [ACCOUNT_ACTIVITY_PROOFS_API_CONTRACT.md](ACCOUNT_ACTIVITY_PROOFS_API_CONTRACT.md) for the upload flow and the full proof validation error table.
 
 ### Success — `200 OK`
 
@@ -85,7 +91,7 @@ Body:
     "status": "termination_requested",
     "terminationRequestedAt": "2026-07-23T08:00:00Z",
     "graceEndDate": "2026-08-22T08:00:00Z",
-    "subscriptionProofIds": ["uuid-of-subscription-proof", "uuid-of-deactivation-proof"],
+    "subscriptionProofIds": ["uuid-of-subscription-proof"],
     "createdAt": "2025-01-15T10:30:00Z",
     "updatedAt": "2026-07-23T08:00:00Z"
   }
@@ -99,7 +105,8 @@ Body:
 | `404` | Account not found | `{"result":"error","status":"404","message":"account {id} not found","data":null}` |
 | `409` | Account is not in `active` status | `{"result":"error","status":"409","message":"only active accounts can be deactivated","data":null}` |
 | `409` | Idempotency-Key reused with different request body | `{"result":"error","status":"409","message":"idempotency key conflict","data":null}` |
-| `422` | proofId is invalid or attachment doesn't exist | `{"result":"error","status":"422","message":"a valid deactivation proofId is required","data":null}` |
+| `400` | A proof is missing, unknown, not yet uploaded, not a PDF, or not a `deactivation_proof` | `{"result":"error","status":"400","message":"a valid deactivation proof is required","data":null}` |
+| `400` | More than 3 proofs supplied | `{"result":"error","status":"400","message":"at most 3 files may be attached to deactivation proof","data":null}` |
 | `403` | Caller is not SECRETARY | Standard forbidden response |
 | `401` | No bearer token | Standard unauthorized response |
 
@@ -158,7 +165,7 @@ Body:
     "status": "active",
     "terminationRequestedAt": null,
     "graceEndDate": null,
-    "subscriptionProofIds": ["uuid-of-subscription-proof", "uuid-of-deactivation-proof"],
+    "subscriptionProofIds": ["uuid-of-subscription-proof"],
     "createdAt": "2025-01-15T10:30:00Z",
     "updatedAt": "2026-07-23T09:00:00Z"
   }
@@ -298,7 +305,7 @@ The full Account JSON schema returned by all deactivation endpoints:
 
 1. **Activity log — deactivation requested**: Action `"account.deactivation_requested"` is recorded when a secretary initiates deactivation.
 2. **Activity log — deactivation cancelled**: Action `"account.deactivation_cancelled"` is recorded when a secretary cancels a pending deactivation.
-3. **Proof attachment linked**: The deactivation proof (`proofId`) is appended to the account's `subscriptionProofIds` list and viewable in the account's attachments.
+3. **Proof attachments linked**: Each proof in `proofIds` is linked to the account tagged `deactivation_proof`, and is returned by `GET /accounts/{id}/attachments?purpose=deactivation_proof`. All proofs of one request share an identical `linkedAt`, so a re-request after a cancellation forms its own distinct set. Deactivation proofs are **not** part of `subscriptionProofIds` — that field carries only the account's subscription proofs. (Builds before V23 did append them to that list; the two are now cleanly separated.)
 4. **Account Change Requests blocked**: Submitting a change request for an account in `termination_requested` status returns `409 Conflict` with message `"can only submit changes for active accounts"`.
 
 ---
@@ -331,7 +338,7 @@ curl -X POST "http://localhost:8080/accounts/{accountId}/deactivate" \
   -H "Authorization: Bearer <jwt>" \
   -H "Content-Type: application/json" \
   -H "Idempotency-Key: deactivate-{accountId}-20260723" \
-  -d '{"proofId": "<proof-attachment-uuid>"}'
+  -d '{"proofIds": ["<proof-attachment-uuid>"]}'
 ```
 
 ### cURL — Cancel a deactivation
@@ -360,7 +367,7 @@ const response = await fetch(`/accounts/${accountId}/deactivate`, {
     'Content-Type': 'application/json',
     'Idempotency-Key': `deactivate-${accountId}-${Date.now()}`,
   },
-  body: JSON.stringify({ proofId: proofAttachmentId }),
+  body: JSON.stringify({ proofIds: proofAttachmentIds }),
 });
 const { data: account } = await response.json();
 // account.status === 'termination_requested'
@@ -405,5 +412,5 @@ const { data } = await response.json();
 3. **Disable edit actions**: For accounts in `termination_requested` status, disable account edit forms and change request submission (the backend will reject with 409 regardless).
 4. **"Cancel Deactivation" button**: Show on accounts with `status === "termination_requested"`. On click, prompt the user for a cancellation reason (required text input), then call `POST /accounts/{id}/cancel-deactivation`.
 5. **After cancellation**: Revert the UI to normal active state — remove the badge, re-enable edit actions, clear the grace period countdown.
-6. **Proof upload flow**: Before calling deactivate, upload the deactivation proof via the presign flow (`POST /attachments/presign/upload` → `PUT /attachments/{id}/blob`), then include the resulting attachment UUID as `proofId` in the deactivation request body.
+6. **Proof upload flow**: Before calling deactivate, upload **1 to 3** deactivation proofs via the presign flow (`POST /attachments/presign/upload` with `purpose: "deactivation_proof"` → `PUT /attachments/{id}/blob`), then pass the resulting attachment UUIDs as `proofIds`. Read them back with `GET /accounts/{id}/attachments?purpose=deactivation_proof`. Full details in [ACCOUNT_ACTIVITY_PROOFS_API_CONTRACT.md](ACCOUNT_ACTIVITY_PROOFS_API_CONTRACT.md).
 7. **Status filter**: Use the accounts list endpoint with `?status=termination_requested` to populate a "Pending Deactivation" dashboard view.
