@@ -35,6 +35,7 @@ import com.puregoldbe.ibms.domain.service.BILLING_ZONE
 import com.puregoldbe.ibms.domain.service.InvoiceNumberFormatter
 import com.puregoldbe.ibms.domain.service.ProrationEngine
 import com.puregoldbe.ibms.domain.valueobject.BillingPeriod
+import com.puregoldbe.ibms.domain.valueobject.Money
 import com.puregoldbe.ibms.domain.valueobject.toMoney
 import com.puregoldbe.ibms.domain.valueobject.toMoneyOrNull
 import com.puregoldbe.ibms.domain.valueobject.toMoneyString
@@ -472,8 +473,8 @@ class ReleaseToFinanceUseCase(
                 details = listOfNotNull(
                     released.invoiceNumber?.let { "Invoice" to it },
                     released.providerName?.let { "Provider" to it },
-                    "Billing period" to released.billingPeriod,
-                    "Total" to released.totalAmount,
+                    "Billing Period" to released.billingPeriod,
+                    "Total Amount" to Money.display(released.totalAmount),
                 ),
                 entityId = topsheetId,
                 linkPath = "/topsheets/$topsheetId",
@@ -616,9 +617,9 @@ class ConfirmTopSheetUseCase(
                     details = listOfNotNull(
                         confirmed.invoiceNumber?.let { "Invoice" to it },
                         confirmed.providerName?.let { "Provider" to it },
-                        "Billing period" to confirmed.billingPeriod,
-                        "Accounts" to confirmed.accountCount.toString(),
-                        "Total" to confirmed.totalAmount,
+                        "Billing Period" to confirmed.billingPeriod,
+                        "Total Accounts" to confirmed.accountCount.toString(),
+                        "Total Amount" to Money.display(confirmed.totalAmount),
                     ),
                     entityId = topsheetId,
                     linkPath = "/topsheets/$topsheetId",

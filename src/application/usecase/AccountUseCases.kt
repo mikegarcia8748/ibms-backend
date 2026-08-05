@@ -84,7 +84,7 @@ class CreateAccountUseCase(
                 details = listOfNotNull(
                     "Account number" to account.accountNumber,
                     account.circuitId?.let { "Circuit" to it },
-                    "MRC" to account.rate,
+                    "MRC" to Money.display(account.rate),
                 ),
                 entityId = account.id,
                 linkPath = "/accounts/${account.id}",
