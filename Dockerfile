@@ -17,6 +17,10 @@ RUN ./gradlew buildFatJar --no-daemon
 FROM eclipse-temurin:25-jre
 WORKDIR /app
 COPY --from=build /app/build/libs/ibms-backend-all.jar app.jar
+# Public certificates only — the relay's self-signed cert, which the JVM's CA set will
+# never vouch for. Set SMTP_TRUSTED_CERT=/app/certs/smtp-relay.pem to use it; the app
+# adds it to the default trust rather than replacing it. See certs/README.md.
+COPY certs certs
 EXPOSE 8080
 # All configuration comes from environment variables — see .env.example
 # (DB_URL, DB_USER, DB_PASSWORD, JWT_SECRET, BCRYPT_COST, BOOTSTRAP_ADMIN_PASSWORD,

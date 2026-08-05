@@ -70,12 +70,53 @@ Key values and what they control:
 | `JWT_SECRET`           | `local-dev-secret-not-for-production`      | Never use outside localhost; rejected outside dev |
 | `BOOTSTRAP_ADMIN_PASSWORD` | *(blank = auto-generated in dev)*      | Logged once on first boot       |
 | `EMAIL_DELIVERY`       | `log`                                      | Notifications logged, not sent. `smtp` requires `SMTP_HOST` |
+| `SMTP_TRUSTED_CERT`    | `./certs/smtp-relay.pem`                   | Required for the internal relay — its cert is self-signed. See below |
 | `STORAGE_LOCAL_DIR`    | `./storage`                                | Uploads stored here on disk    |
 
 A variable already set in your shell wins over the `.env` entry, so
 `BOOTSTRAP_ADMIN_PASSWORD='...' ./gradlew run` overrides the file. Only `./gradlew run`
 reads `.env` at all — for the packaged jar, load it yourself:
 `set -a; source .env; set +a; java -jar build/libs/ibms-backend-all.jar`
+
+---
+
+## Sending Real Email Locally
+
+`EMAIL_DELIVERY=log` is the default and keeps the enqueue → dispatch pipeline running
+without putting anything on the wire. To send for real through the company relay:
+
+```
+EMAIL_DELIVERY=smtp
+SMTP_HOST=mbox2.puregold.com.ph
+SMTP_PORT=587
+SMTP_USERNAME=puregold\ibms
+SMTP_STARTTLS=true
+SMTP_SSL=false
+SMTP_TRUSTED_CERT=./certs/smtp-relay.pem
+```
+
+Four things that are not obvious:
+
+- **The relay is internal only.** `mbox2.puregold.com.ph` resolves to a LAN address, so
+  this works on the office network or a VPN into it and nowhere else.
+- **`SMTP_TRUSTED_CERT` is not optional here.** The relay's certificate is self-signed;
+  without the pin the TLS upgrade fails and every notification lands as a `FAILED` row.
+- **The certificate does not name `SMTP_HOST`, and that is fine.** It names only
+  `MBOX2.puregold.local`. The pin accepts one exact certificate, which settles identity
+  more tightly than a name would — see [certs/README.md](certs/README.md).
+- **`SMTP_USERNAME` is `DOMAIN\user`, not the email address.** Exchange rejects the SMTP
+  address here with `535 5.7.3 Authentication unsuccessful`. `MAIL_FROM_EMAIL` stays the
+  mailbox address.
+
+If sends fail, the reason is on the `email_log` row's `provider_response` — the gateway
+flattens the exception's cause chain, so the failures stay distinguishable:
+
+| `provider_response` contains | Cause |
+|---|---|
+| `PKIX path building failed` | `SMTP_TRUSTED_CERT` unset or unreadable |
+| `does not match the pin` | Certificate reissued — re-export `certs/smtp-relay.pem` |
+| `535 5.7.3 Authentication unsuccessful` | Credentials, or `SMTP_USERNAME` not in `DOMAIN\user` form |
+| `550 relay access denied` | Mailbox not permitted to relay or to send as `MAIL_FROM_EMAIL` — an IT-side grant, not a config fix |
 
 ---
 

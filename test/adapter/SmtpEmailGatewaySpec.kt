@@ -11,9 +11,11 @@ import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldStartWith
 import jakarta.mail.Message
+import jakarta.mail.MessagingException
 import jakarta.mail.internet.InternetAddress
 import jakarta.mail.internet.MimeMessage
 import jakarta.mail.internet.MimeMultipart
+import javax.net.ssl.SSLHandshakeException
 
 /**
  * Builds the MIME message without an SMTP server: the gateway's `transport` seam is
@@ -117,6 +119,45 @@ class SmtpEmailGatewaySpec : BehaviorSpec({
             Then("the failure is returned, not thrown — one bad send must not stall the outbox") {
                 result.status shouldBe EmailDeliveryStatus.FAILED
                 result.providerResponse!! shouldContain "550 relay access denied"
+            }
+        }
+    }
+
+    Given("a failure whose real reason sits on the cause chain, as a TLS rejection does") {
+        val gateway = SmtpEmailGateway(cfg) {
+            throw MessagingException(
+                "Could not convert socket to TLS",
+                SSLHandshakeException("PKIX path building failed: unable to find valid certification path"),
+            )
+        }
+
+        When("sending") {
+            val result = gateway.send(message)
+
+            Then("the stored response names the root cause, not just the generic wrapper") {
+                result.status shouldBe EmailDeliveryStatus.FAILED
+                val response = result.providerResponse!!
+                response shouldContain "Could not convert socket to TLS"
+                response shouldContain "PKIX path building failed"
+            }
+        }
+    }
+
+    Given("a cause chain that loops back on itself") {
+        // Plain exceptions, because MessagingException forbids initCause outright — it
+        // carries its own chain via setNextException.
+        val outer = RuntimeException("outer")
+        val inner = RuntimeException("inner")
+        outer.initCause(inner)
+        inner.initCause(outer)
+        val gateway = SmtpEmailGateway(cfg) { throw outer }
+
+        When("sending") {
+            val result = gateway.send(message)
+
+            Then("the walk terminates instead of spinning") {
+                result.status shouldBe EmailDeliveryStatus.FAILED
+                result.providerResponse!! shouldContain "outer"
             }
         }
     }

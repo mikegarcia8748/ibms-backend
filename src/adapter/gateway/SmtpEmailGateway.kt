@@ -15,7 +15,11 @@ import jakarta.mail.internet.MimeBodyPart
 import jakarta.mail.internet.MimeMessage
 import jakarta.mail.internet.MimeMultipart
 import org.slf4j.LoggerFactory
+import java.io.File
 import java.util.Properties
+
+/** Enough of the chain to reach the root cause without letting a cycle run away. */
+private const val MAX_CAUSE_DEPTH = 5
 
 /**
  * Real delivery through the org's internal SMTP relay. Called only by the background
@@ -72,9 +76,25 @@ class SmtpEmailGateway(
             EmailSendResult(EmailDeliveryStatus.SENT, "smtp ${cfg.host}:${cfg.port}")
         }.getOrElse { e ->
             log.error("[email:smtp] send to {} failed", message.toEmails, e)
-            EmailSendResult(EmailDeliveryStatus.FAILED, "${e::class.simpleName}: ${e.message}".take(500))
+            EmailSendResult(EmailDeliveryStatus.FAILED, describe(e))
         }
     }
+
+    /**
+     * Flattens the cause chain into the stored response. Jakarta Mail wraps the reason
+     * that actually matters: a rejected relay certificate arrives as the entirely
+     * uninformative "Could not convert socket to TLS", with `PKIX path building failed`
+     * only on the cause. Recording the head of the chain alone sends whoever reads the
+     * `email_log` row hunting for a stack trace that has long since rotated away.
+     *
+     * The depth bound is also what makes a cyclic chain safe to walk — the JDK forbids
+     * an exception causing itself, but not two exceptions causing each other.
+     */
+    private fun describe(e: Throwable): String =
+        generateSequence(e) { prev -> prev.cause?.takeIf { it !== prev } }
+            .take(MAX_CAUSE_DEPTH)
+            .joinToString(" <- ") { "${it::class.simpleName}: ${it.message}" }
+            .take(500)
 
     private fun buildSession(): Session {
         val props = Properties().apply {
@@ -90,6 +110,15 @@ class SmtpEmailGateway(
             put("mail.smtp.connectiontimeout", "10000")
             put("mail.smtp.timeout", "20000")
             put("mail.smtp.writetimeout", "20000")
+            cfg.trustedCertPath?.let { path ->
+                // Jakarta Mail takes the factory as a live object here, not a class name.
+                put("mail.smtp.ssl.socketFactory", SmtpTrust.socketFactory(File(path)))
+                // Off only because the pin is stricter than the check it replaces: one
+                // exact certificate is accepted, so reaching the right relay no longer
+                // rests on the name resolving to it. Without a pin this stays on (the
+                // Jakarta Mail default) — see SmtpTrust for the full argument.
+                put("mail.smtp.ssl.checkserveridentity", "false")
+            }
         }
         return if (cfg.username != null) {
             Session.getInstance(

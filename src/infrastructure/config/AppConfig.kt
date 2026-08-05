@@ -2,6 +2,7 @@ package com.puregoldbe.ibms.infrastructure.config
 
 import com.puregoldbe.ibms.adapter.security.BcryptPasswordHasher
 import com.puregoldbe.ibms.domain.service.SessionPolicy
+import java.io.File
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 import kotlin.time.Duration.Companion.days
@@ -76,6 +77,12 @@ data class SmtpConfig(
     val sslOnConnect: Boolean,
     val fromEmail: String,
     val fromName: String?,
+    /**
+     * PEM file holding the relay's certificate, for an internal relay whose cert is
+     * self-signed and so trusted by no public CA. Null means the JVM's default trust
+     * store decides on its own. See `SmtpTrust`.
+     */
+    val trustedCertPath: String? = null,
 )
 
 data class AppConfig(
@@ -276,6 +283,13 @@ data class AppConfig(
                 !(startTls && sslOnConnect),
                 "SMTP_STARTTLS and SMTP_SSL are mutually exclusive — port 587 uses STARTTLS, port 465 uses SSL",
             )
+            // Checked here rather than on first send: an unreadable pin means every
+            // notification fails TLS, and a boot that refuses beats an outbox that
+            // silently fills with FAILED rows.
+            val trustedCertPath = raw("SMTP_TRUSTED_CERT")
+            if (trustedCertPath != null && !File(trustedCertPath).isFile) {
+                problem("SMTP_TRUSTED_CERT: no readable file at \"$trustedCertPath\"")
+            }
             return SmtpConfig(
                 host = host ?: "",
                 port = int("SMTP_PORT", default = 587, range = 1..65_535),
@@ -285,6 +299,7 @@ data class AppConfig(
                 sslOnConnect = sslOnConnect,
                 fromEmail = fromEmail ?: "",
                 fromName = raw("MAIL_FROM_NAME", "IBMS Notifications"),
+                trustedCertPath = trustedCertPath,
             )
         }
 
