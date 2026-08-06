@@ -17,6 +17,9 @@ All endpoints require authentication. Base path: `/accounts`.
 | POST | `/accounts/{id}/cancel-deactivation` | SECRETARY | Cancel pending deactivation, revert to active |
 | GET | `/accounts?status=termination_requested` | Any authenticated | List accounts pending deactivation with grace end dates |
 
+> `SYSADMIN` is a global superuser and is admitted to every endpoint in this contract in
+> addition to the role named above.
+
 ---
 
 ## State Transition Diagram
@@ -104,8 +107,10 @@ See [ACCOUNT_ACTIVITY_PROOFS_API_CONTRACT.md](ACCOUNT_ACTIVITY_PROOFS_API_CONTRA
 |--------|-----------|------|
 | `404` | Account not found | `{"result":"error","status":"404","message":"account {id} not found","data":null}` |
 | `409` | Account is not in `active` status | `{"result":"error","status":"409","message":"only active accounts can be deactivated","data":null}` |
-| `409` | Idempotency-Key reused with different request body | `{"result":"error","status":"409","message":"idempotency key conflict","data":null}` |
-| `400` | A proof is missing, unknown, not yet uploaded, not a PDF, or not a `deactivation_proof` | `{"result":"error","status":"400","message":"a valid deactivation proof is required","data":null}` |
+| `409` | Another request moved the account between the check and the write | `{"result":"error","status":"409","message":"account {id} is no longer active; deactivation was not applied","data":null}` |
+| `409` | Idempotency-Key reused with a different request (including a different account) | `{"result":"error","status":"409","message":"Idempotency-Key reused with a different request","data":null}` |
+| `400` | A proof is unknown, not yet uploaded, not a PDF, or not a `deactivation_proof` | `{"result":"error","status":"400","message":"a valid deactivation proof is required","data":null}` |
+| `400` | No proof supplied at all | `{"result":"error","status":"400","message":"at least one deactivation proof is required","data":null}` |
 | `400` | More than 3 proofs supplied | `{"result":"error","status":"400","message":"at most 3 files may be attached to deactivation proof","data":null}` |
 | `403` | Caller is not SECRETARY | Standard forbidden response |
 | `401` | No bearer token | Standard unauthorized response |
@@ -178,6 +183,8 @@ Body:
 |--------|-----------|------|
 | `404` | Account not found | `{"result":"error","status":"404","message":"account {id} not found","data":null}` |
 | `409` | Account is not in `termination_requested` status | `{"result":"error","status":"409","message":"only accounts in termination_requested status can have deactivation cancelled","data":null}` |
+| `409` | The grace-expiry job archived the account between the check and the write | `{"result":"error","status":"409","message":"account {id} is no longer in termination_requested status; cancellation was not applied","data":null}` |
+| `400` | `reason` is blank | `{"result":"error","status":"400","message":"a cancellation reason is required","data":null}` |
 | `403` | Caller is not SECRETARY | Standard forbidden response |
 | `401` | No bearer token | Standard unauthorized response |
 
@@ -307,6 +314,8 @@ The full Account JSON schema returned by all deactivation endpoints:
 2. **Activity log — deactivation cancelled**: Action `"account.deactivation_cancelled"` is recorded when a secretary cancels a pending deactivation.
 3. **Proof attachments linked**: Each proof in `proofIds` is linked to the account tagged `deactivation_proof`, and is returned by `GET /accounts/{id}/attachments?purpose=deactivation_proof`. All proofs of one request share an identical `linkedAt`, so a re-request after a cancellation forms its own distinct set. Deactivation proofs are **not** part of `subscriptionProofIds` — that field carries only the account's subscription proofs. (Builds before V23 did append them to that list; the two are now cleanly separated.)
 4. **Account Change Requests blocked**: Submitting a change request for an account in `termination_requested` status returns `409 Conflict` with message `"can only submit changes for active accounts"`.
+5. **Email notification**: an `account.deactivation_requested` notification is queued to every subscriber of that event. It carries the account number, the circuit, the store, and the grace-end date — the account number alone cannot identify the subject, since one number legitimately recurs across stores and circuits. Grace expiry queues `account.terminated` the same way. See [NOTIFICATION_SUBSCRIPTION_ADMIN_API_CONTRACT.md](NOTIFICATION_SUBSCRIPTION_ADMIN_API_CONTRACT.md).
+6. **The identity slot stays occupied**: `termination_requested` still counts as live for the account-identity uniqueness rule `(store, provider, account number, circuit)`. Re-provisioning the same identity at that store is rejected with `409` until the grace period expires to `inactive`; the message names the blocking account's pending-termination status. A *transfer*, by contrast, frees the source slot immediately.
 
 ---
 
@@ -320,12 +329,38 @@ Idempotency-Key: <unique-string>
 
 | Scenario | Behavior |
 |----------|----------|
-| Same key + same body | Replays the stored response (no side effects re-executed) |
-| Same key + different body | Returns `409 Conflict` |
+| Same key + same request | Replays the stored response (no side effects re-executed) |
+| Same key + different request | Returns `409 Conflict` |
 | No key provided | Normal (non-idempotent) execution |
 
-- **Scope**: Per-user, per-operation (`account.deactivate`).
-- **Semantics**: Identical to the transfer endpoint's idempotency behavior.
+- **Scope**: Per-operation (`account.deactivate`). Keys are **global within that scope** —
+  they are not partitioned by user, so treat a key as globally unique (a UUID) rather than
+  assuming your session owns its own namespace.
+- **What "same request" means**: the hash covers the **account id** as well as the proof
+  set. Reusing one key against a different account is therefore a *different* request and
+  returns `409` — it does not, as it once did, replay the first account's response while
+  leaving the second account untouched.
+- **Semantics**: Identical to the transfer endpoint's idempotency behavior. Both transfer
+  entry points (`POST /accounts/{id}/transfer` and `POST /transfers`) hash to the same
+  value for the same logical transfer, so a retry may switch between them.
+
+### Choosing a key
+
+One key per **logical attempt**, generated once and reused for every retry of that attempt:
+
+```
+Idempotency-Key: 6f1b1f2e-3c2a-4a90-9a1e-7b2d0c4e5a11   // a UUID, generated once
+```
+
+Two anti-patterns to avoid:
+
+- **A per-call key** (e.g. one containing `Date.now()`) is a new key every time, so retries
+  are never deduplicated — the header is present but does nothing.
+- **A key that is stable for longer than one attempt** (e.g. `deactivate-{accountId}-{date}`)
+  is reused by the *next* attempt on the same account that day. Because completed keys are
+  retained, a deactivate → cancel-deactivation → deactivate sequence within that window
+  replays the first response: the caller is told `termination_requested` while the account
+  is still `active`. Generate a fresh key whenever the user starts a new deactivation.
 
 ---
 
@@ -337,7 +372,7 @@ Idempotency-Key: <unique-string>
 curl -X POST "http://localhost:8080/accounts/{accountId}/deactivate" \
   -H "Authorization: Bearer <jwt>" \
   -H "Content-Type: application/json" \
-  -H "Idempotency-Key: deactivate-{accountId}-20260723" \
+  -H "Idempotency-Key: $(uuidgen)" \
   -d '{"proofIds": ["<proof-attachment-uuid>"]}'
 ```
 
@@ -360,12 +395,17 @@ curl "http://localhost:8080/accounts?status=termination_requested&limit=20" \
 ### JavaScript (Fetch) — Deactivate an account
 
 ```javascript
+// Generated ONCE when the user confirms, then reused by every retry of this attempt.
+// Do not derive it from the clock (a new key each call defeats idempotency) or from the
+// account id plus the date (a later attempt on the same account would replay this one).
+const idempotencyKey = crypto.randomUUID();
+
 const response = await fetch(`/accounts/${accountId}/deactivate`, {
   method: 'POST',
   headers: {
     'Authorization': `Bearer ${token}`,
     'Content-Type': 'application/json',
-    'Idempotency-Key': `deactivate-${accountId}-${Date.now()}`,
+    'Idempotency-Key': idempotencyKey,
   },
   body: JSON.stringify({ proofIds: proofAttachmentIds }),
 });

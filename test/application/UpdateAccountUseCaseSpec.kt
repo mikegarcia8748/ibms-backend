@@ -66,6 +66,14 @@ class UpdateAccountUseCaseSpec : BehaviorSpec({
             rate = "1500.00", installationDate = LocalDate(2025, 1, 1),
             createdAt = Instant.fromEpochSeconds(0),
         )
+        // The update now reads the current row first, to refuse a store change and to
+        // re-check identity when the number, circuit or provider moves.
+        every { accounts.findById("acc-1") } returns Account(
+            id = "acc-1", accountNumber = "ACC-001", providerId = "p1", storeId = "s1",
+            rate = "1000.00", installationDate = LocalDate(2025, 1, 1),
+            createdAt = Instant.fromEpochSeconds(0),
+        )
+        every { accounts.findLiveByIdentity(any(), any(), any(), any()) } returns null
     }
 
     Given("a secretary editing an account directly") {

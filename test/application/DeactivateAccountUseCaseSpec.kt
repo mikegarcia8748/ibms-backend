@@ -5,11 +5,17 @@ import com.puregoldbe.ibms.domain.error.DomainError
 import com.puregoldbe.ibms.domain.model.Account
 import com.puregoldbe.ibms.domain.model.AccountStatus
 import com.puregoldbe.ibms.domain.model.AttachmentPurpose
+import com.puregoldbe.ibms.domain.model.NotificationContext
+import com.puregoldbe.ibms.domain.model.NotificationEvent
+import com.puregoldbe.ibms.domain.model.Store
+import com.puregoldbe.ibms.domain.model.StoreStatus
+import com.puregoldbe.ibms.domain.model.StoreType
 import com.puregoldbe.ibms.domain.port.AccountRepository
 import com.puregoldbe.ibms.domain.port.ActivityRecorder
 import com.puregoldbe.ibms.domain.port.AttachmentRepository
 import com.puregoldbe.ibms.domain.port.IdempotencyContext
 import com.puregoldbe.ibms.domain.port.NotificationEnqueuer
+import com.puregoldbe.ibms.domain.port.StoreRepository
 import com.puregoldbe.ibms.support.FakeClock
 import com.puregoldbe.ibms.support.FakeIdempotencyKeyRepository
 import com.puregoldbe.ibms.support.ImmediateTransactionRunner
@@ -21,19 +27,20 @@ import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.slot
 import io.mockk.verify
 import kotlinx.datetime.Instant
 import kotlinx.datetime.LocalDate
 
 private fun activeAccount(id: String = "acc-1") = Account(
-    id = id, accountNumber = "ACC-001", providerId = "p1", storeId = "s1",
+    id = id, accountNumber = "ACC-001", circuitId = "CIRC-1", providerId = "p1", storeId = "s1",
     rate = "1000.00", installationDate = LocalDate(2025, 1, 1),
     status = AccountStatus.ACTIVE,
     createdAt = Instant.fromEpochSeconds(0),
 )
 
 private fun terminationRequestedAccount(id: String = "acc-1") = Account(
-    id = id, accountNumber = "ACC-001", providerId = "p1", storeId = "s1",
+    id = id, accountNumber = "ACC-001", circuitId = "CIRC-1", providerId = "p1", storeId = "s1",
     rate = "1000.00", installationDate = LocalDate(2025, 1, 1),
     status = AccountStatus.TERMINATION_REQUESTED,
     terminationRequestedAt = Instant.parse("2026-08-01T00:00:00Z"),
@@ -59,16 +66,27 @@ class DeactivateAccountUseCaseSpec : BehaviorSpec({
     isolationMode = IsolationMode.InstancePerLeaf
 
     val accounts = mockk<AccountRepository>(relaxed = true)
+    val stores = mockk<StoreRepository>(relaxed = true)
     val attachments = mockk<AttachmentRepository>(relaxed = true)
     val idempotency = FakeIdempotencyKeyRepository()
     val activity = mockk<ActivityRecorder>(relaxed = true)
     val notifications = mockk<NotificationEnqueuer>(relaxed = true)
     val clock = FakeClock(Instant.parse("2026-08-01T00:00:00Z"))
-    val useCase = DeactivateAccountUseCase(accounts, attachments, idempotency, activity, notifications, clock, ImmediateTransactionRunner())
+    val useCase = DeactivateAccountUseCase(
+        accounts, stores, attachments, idempotency, activity, notifications, clock, ImmediateTransactionRunner(),
+    )
+
+    beforeTest {
+        every { stores.findById("s1") } returns Store(
+            id = "s1", storeType = StoreType.PUREGOLD, branchCode = "001", name = "Main",
+            status = StoreStatus.ACTIVE, proofOfInstallationId = "inst-1",
+            createdAt = Instant.fromEpochSeconds(0),
+        )
+    }
 
     Given("an active account") {
         val account = activeAccount()
-        every { accounts.findById("acc-1") } returns account
+        every { accounts.findByIdForUpdate("acc-1") } returns account
         every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1", AttachmentPurpose.DEACTIVATION_PROOF)
         every { accounts.markTerminationRequested("acc-1", any()) } returns terminationRequestedAccount()
 
@@ -83,7 +101,7 @@ class DeactivateAccountUseCaseSpec : BehaviorSpec({
     }
 
     Given("a non-active account (TERMINATION_REQUESTED)") {
-        every { accounts.findById("acc-1") } returns terminationRequestedAccount()
+        every { accounts.findByIdForUpdate("acc-1") } returns terminationRequestedAccount()
         every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1", AttachmentPurpose.DEACTIVATION_PROOF)
 
         When("deactivating") {
@@ -96,7 +114,7 @@ class DeactivateAccountUseCaseSpec : BehaviorSpec({
     }
 
     Given("a transferred account") {
-        every { accounts.findById("acc-1") } returns transferredAccount()
+        every { accounts.findByIdForUpdate("acc-1") } returns transferredAccount()
         every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1", AttachmentPurpose.DEACTIVATION_PROOF)
 
         When("deactivating") {
@@ -109,7 +127,7 @@ class DeactivateAccountUseCaseSpec : BehaviorSpec({
     }
 
     Given("an inactive account") {
-        every { accounts.findById("acc-1") } returns inactiveAccount()
+        every { accounts.findByIdForUpdate("acc-1") } returns inactiveAccount()
         every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1", AttachmentPurpose.DEACTIVATION_PROOF)
 
         When("deactivating") {
@@ -123,7 +141,7 @@ class DeactivateAccountUseCaseSpec : BehaviorSpec({
 
     Given("valid deactivation with proof linking") {
         val account = activeAccount()
-        every { accounts.findById("acc-1") } returns account
+        every { accounts.findByIdForUpdate("acc-1") } returns account
         every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1", AttachmentPurpose.DEACTIVATION_PROOF)
         every { accounts.markTerminationRequested("acc-1", any()) } returns terminationRequestedAccount()
 
@@ -138,7 +156,7 @@ class DeactivateAccountUseCaseSpec : BehaviorSpec({
     }
 
     Given("a deactivation carrying the maximum three proofs") {
-        every { accounts.findById("acc-1") } returns activeAccount()
+        every { accounts.findByIdForUpdate("acc-1") } returns activeAccount()
         listOf("proof-1", "proof-2", "proof-3").forEach {
             every { attachments.findById(it) } returns uploadedPdfAttachment(it, AttachmentPurpose.DEACTIVATION_PROOF)
         }
@@ -166,7 +184,7 @@ class DeactivateAccountUseCaseSpec : BehaviorSpec({
     }
 
     Given("a deactivation carrying four proofs") {
-        every { accounts.findById("acc-1") } returns activeAccount()
+        every { accounts.findByIdForUpdate("acc-1") } returns activeAccount()
         (1..4).forEach {
             every { attachments.findById("proof-$it") } returns
                 uploadedPdfAttachment("proof-$it", AttachmentPurpose.DEACTIVATION_PROOF)
@@ -183,7 +201,7 @@ class DeactivateAccountUseCaseSpec : BehaviorSpec({
     }
 
     Given("a deactivation with no proofs at all") {
-        every { accounts.findById("acc-1") } returns activeAccount()
+        every { accounts.findByIdForUpdate("acc-1") } returns activeAccount()
 
         When("deactivating") {
             Then("throws Validation") {
@@ -193,7 +211,7 @@ class DeactivateAccountUseCaseSpec : BehaviorSpec({
     }
 
     Given("a deactivation repeating the same proof") {
-        every { accounts.findById("acc-1") } returns activeAccount()
+        every { accounts.findByIdForUpdate("acc-1") } returns activeAccount()
         every { attachments.findById("proof-1") } returns
             uploadedPdfAttachment("proof-1", AttachmentPurpose.DEACTIVATION_PROOF)
 
@@ -208,7 +226,7 @@ class DeactivateAccountUseCaseSpec : BehaviorSpec({
     }
 
     Given("a deactivation whose proof is a subscription proof") {
-        every { accounts.findById("acc-1") } returns activeAccount()
+        every { accounts.findByIdForUpdate("acc-1") } returns activeAccount()
         every { attachments.findById("sub-1") } returns
             uploadedPdfAttachment("sub-1", AttachmentPurpose.SUBSCRIPTION_PROOF)
 
@@ -224,7 +242,7 @@ class DeactivateAccountUseCaseSpec : BehaviorSpec({
 
     Given("valid deactivation with activity recording") {
         val account = activeAccount()
-        every { accounts.findById("acc-1") } returns account
+        every { accounts.findByIdForUpdate("acc-1") } returns account
         every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1", AttachmentPurpose.DEACTIVATION_PROOF)
         every { accounts.markTerminationRequested("acc-1", any()) } returns terminationRequestedAccount()
 
@@ -240,7 +258,7 @@ class DeactivateAccountUseCaseSpec : BehaviorSpec({
 
     Given("invalid proofId (doesn't exist)") {
         val account = activeAccount()
-        every { accounts.findById("acc-1") } returns account
+        every { accounts.findByIdForUpdate("acc-1") } returns account
         every { attachments.findById("bad-proof") } returns null
 
         When("deactivating") {
@@ -253,7 +271,7 @@ class DeactivateAccountUseCaseSpec : BehaviorSpec({
     }
 
     Given("account not found") {
-        every { accounts.findById("missing") } returns null
+        every { accounts.findByIdForUpdate("missing") } returns null
 
         When("deactivating") {
             Then("throws NotFound") {
@@ -264,9 +282,59 @@ class DeactivateAccountUseCaseSpec : BehaviorSpec({
         }
     }
 
+    Given("an account whose status moves between the guard and the write") {
+        every { accounts.findByIdForUpdate("acc-1") } returns activeAccount()
+        every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1", AttachmentPurpose.DEACTIVATION_PROOF)
+        // The conditional write matched no row: another transaction got there first.
+        every { accounts.markTerminationRequested("acc-1", any()) } returns null
+
+        When("deactivating") {
+            Then("throws Conflict, not NotFound — the account exists, it just moved") {
+                val error = shouldThrow<DomainError.Conflict> {
+                    useCase("acc-1", listOf("proof-1"), "actor-1")
+                }
+                error.message shouldBe "account acc-1 is no longer active; deactivation was not applied"
+            }
+        }
+    }
+
+    Given("a valid deactivation") {
+        every { accounts.findByIdForUpdate("acc-1") } returns activeAccount()
+        every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1", AttachmentPurpose.DEACTIVATION_PROOF)
+        every { accounts.markTerminationRequested("acc-1", any()) } returns terminationRequestedAccount()
+
+        When("deactivating") {
+            useCase("acc-1", listOf("proof-1"), "actor-1")
+
+            Then("the status is read under a row lock, not with a plain select") {
+                verify(exactly = 1) { accounts.findByIdForUpdate("acc-1") }
+                verify(exactly = 0) { accounts.findById(any()) }
+            }
+
+            Then("the grace window starts at the injected clock, not at wall time") {
+                verify(exactly = 1) {
+                    accounts.markTerminationRequested("acc-1", Instant.parse("2026-08-01T00:00:00Z"))
+                }
+            }
+
+            Then("a notification is enqueued that can identify which circuit is retiring") {
+                val ctx = slot<NotificationContext>()
+                verify(exactly = 1) {
+                    notifications.enqueue(NotificationEvent.ACCOUNT_DEACTIVATION_REQUESTED, capture(ctx))
+                }
+                val details = ctx.captured.details.toMap()
+                details["Account number"] shouldBe "ACC-001"
+                details["Circuit"] shouldBe "CIRC-1"
+                details["Store"] shouldBe "Main (Branch 001)"
+                // The deadline the whole notification exists to announce.
+                details["Grace period ends"] shouldBe "2026-08-31T00:00:00Z"
+            }
+        }
+    }
+
     Given("idempotency key with same request sent twice") {
         val account = activeAccount()
-        every { accounts.findById("acc-1") } returns account
+        every { accounts.findByIdForUpdate("acc-1") } returns account
         every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1", AttachmentPurpose.DEACTIVATION_PROOF)
         every { accounts.markTerminationRequested("acc-1", any()) } returns terminationRequestedAccount()
 
@@ -275,7 +343,7 @@ class DeactivateAccountUseCaseSpec : BehaviorSpec({
         When("same request sent twice") {
             val first = useCase("acc-1", listOf("proof-1"), "actor-1", idem)
             // Second call: account is now in TERMINATION_REQUESTED but idempotency replays
-            every { accounts.findById("acc-1") } returns terminationRequestedAccount()
+            every { accounts.findByIdForUpdate("acc-1") } returns terminationRequestedAccount()
             val second = useCase("acc-1", listOf("proof-1"), "actor-1", idem)
 
             Then("returns same result (replay)") {
@@ -287,7 +355,7 @@ class DeactivateAccountUseCaseSpec : BehaviorSpec({
 
     Given("idempotency key with different request body") {
         val account = activeAccount()
-        every { accounts.findById("acc-1") } returns account
+        every { accounts.findByIdForUpdate("acc-1") } returns account
         every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1", AttachmentPurpose.DEACTIVATION_PROOF)
         every { attachments.findById("proof-2") } returns uploadedPdfAttachment("proof-2", AttachmentPurpose.DEACTIVATION_PROOF)
         every { accounts.markTerminationRequested("acc-1", any()) } returns terminationRequestedAccount()

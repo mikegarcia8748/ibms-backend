@@ -22,6 +22,7 @@ import com.puregoldbe.ibms.domain.port.NotificationEnqueuer
 import com.puregoldbe.ibms.domain.port.ProviderRepository
 import com.puregoldbe.ibms.domain.model.ProviderStatus
 import com.puregoldbe.ibms.domain.port.TransactionRunner
+import com.puregoldbe.ibms.domain.service.AccountIdentityPolicy
 import com.puregoldbe.ibms.domain.valueobject.Money
 
 class SubmitAccountChangeRequestUseCase(
@@ -150,15 +151,27 @@ class ApproveAccountChangeRequestUseCase(
             subscriptionProofIds = account.subscriptionProofIds,
         )
 
-        if (request.accountNumberNew != null || request.providerIdNew != null) {
-            val newProvider = request.providerIdNew ?: account.providerId
-            val newNumber = request.accountNumberNew ?: account.accountNumber
-            val newCircuit = request.circuitIdNew ?: account.circuitId
-            if (newProvider != account.providerId || newNumber != account.accountNumber) {
-                if (accounts.existsByIdentity(account.storeId, newProvider, newNumber, newCircuit)) {
-                    throw DomainError.Conflict("account number $newNumber already exists for this provider")
+        // circuitId is the fourth column of the identity index, so a circuit-only change
+        // moves the account to a different identity just as surely as a renumber does.
+        // Leaving it out of this check let such a change fall through to the DB and come
+        // back as an unattributed "resource already exists" — or, at a store holding
+        // several circuits under one account number, collide with a sibling account.
+        val newProvider = request.providerIdNew ?: account.providerId
+        val newNumber = AccountIdentityPolicy.normalizeAccountNumber(request.accountNumberNew ?: account.accountNumber)
+        val newCircuit = AccountIdentityPolicy.normalizeCircuitId(request.circuitIdNew ?: account.circuitId)
+        val identityChanged = newProvider != account.providerId ||
+            newNumber != account.accountNumber ||
+            newCircuit != account.circuitId
+        if (identityChanged) {
+            accounts.findLiveByIdentity(account.storeId, newProvider, newNumber, newCircuit)
+                ?.takeIf { it.id != account.id }
+                ?.let {
+                    throw DomainError.Conflict(
+                        "account number $newNumber with " +
+                            (newCircuit?.let { c -> "circuit $c" } ?: "no circuit") +
+                            " already exists at this store",
+                    )
                 }
-            }
         }
 
         accounts.update(request.accountId, updateReq)
