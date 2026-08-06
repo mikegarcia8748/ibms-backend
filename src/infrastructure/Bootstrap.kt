@@ -55,13 +55,15 @@ fun Application.moduleWith(cfg: AppConfig) {
     // this re-check catches a hand-built config that never went through it.
     cfg.requireCoherent()
     log.info(
-        "[config] APP_ENV={} db={} email={} cors={} appUrl={}",
+        "[config] APP_ENV={} db={} email={} cors={} appUrl={} webClientUrl={}",
         cfg.appEnv.name.lowercase(),
         cfg.db.url,
         cfg.emailDelivery.name.lowercase(),
         if (cfg.corsAllowedHosts.isEmpty()) "any-host" else cfg.corsAllowedHosts.joinToString(","),
         cfg.appUrl,
+        cfg.webClientUrl,
     )
+    cfg.webClientCorsWarning()?.let { log.warn(it) }
 
     // --- Database (Hikari + Flyway + Exposed) ---
     val dataSource = buildDataSource(cfg.db)
@@ -122,7 +124,7 @@ fun Application.moduleWith(cfg: AppConfig) {
     val sessionIssuer = SessionIssuer(sessions, secrets, jwtService, sessionPolicy)
     // Event-driven email: use cases enqueue into email_log inside their transaction;
     // the background dispatcher below drains it through emailGateway.
-    val notifications = NotificationService(notificationSubs, emailLog, cfg.appUrl, cfg.smtp?.fromEmail)
+    val notifications = NotificationService(notificationSubs, emailLog, users, cfg.webClientUrl, cfg.smtp?.fromEmail)
     val login = LoginUseCase(users, passwordHasher, jwtService, sessionIssuer, sessionPolicy, clock, tx)
     val completeFirstLogin = CompleteFirstLoginUseCase(users, sessions, passwordHasher, sessionIssuer, clock, tx)
     val changeOwnPassword = ChangeOwnPasswordUseCase(users, sessions, passwordHasher, sessionIssuer, clock, tx)
@@ -150,7 +152,7 @@ fun Application.moduleWith(cfg: AppConfig) {
     val getAccount = GetAccountUseCase(accounts, tx)
     val createAccount = CreateAccountUseCase(accounts, providers, stores, activities, attachments, notifications, tx)
     val createISPAccount = CreateISPAccountUseCase(createAccount, providers, attachments, clock, tx)
-    val updateAccount = UpdateAccountUseCase(accounts, providers, stores, notifications, tx)
+    val updateAccount = UpdateAccountUseCase(accounts, providers, stores, activities, notifications, tx)
     val transferAccount = TransferAccountUseCase(accounts, stores, transfers, attachments, idempotency, activities, notifications, clock, tx)
     val listTransfers = ListTransfersUseCase(transfers, tx)
     val deactivateAccount = DeactivateAccountUseCase(accounts, attachments, idempotency, activities, notifications, clock, tx)

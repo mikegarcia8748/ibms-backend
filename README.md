@@ -56,7 +56,9 @@ curl localhost:8082/stores -H "Authorization: Bearer $TOKEN"
 ```
 On later runs, `POST /auth/login` returns the tokens directly.
 Run on a different port: set `APP_PORT` (in `.env` or the environment). Keep `APP_URL`
-in step with it — presigned attachment links are built from `APP_URL`.
+in step with it — presigned attachment links are built from `APP_URL`. Notification email
+buttons are built from `WEB_CLIENT_URL` instead, which is the *web client's* origin; the
+two must differ or the app refuses to boot.
 
 ## Authentication flow
 Accounts are provisioned by a sysadmin — there is no self-registration, and a
@@ -109,7 +111,8 @@ than one per restart.
 **`APP_ENV` is the switch that matters.** It defaults to `prod` when unset, so a
 deployment that forgets it fails loudly instead of silently taking the permissive
 local-dev path. Under `staging`/`prod`, `JWT_SECRET` (length- and
-placeholder-checked), `DB_PASSWORD`, `APP_URL` (https, non-localhost),
+placeholder-checked), `DB_PASSWORD`, `APP_URL` and `WEB_CLIENT_URL` (https,
+non-localhost, and distinct from each other),
 `CORS_ALLOWED_HOSTS` (no any-host fallback), `EMAIL_DELIVERY` and the bootstrap-admin
 settings must all be set explicitly. Under `dev` the local defaults apply.
 

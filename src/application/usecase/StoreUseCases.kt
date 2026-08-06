@@ -3,6 +3,7 @@ package com.puregoldbe.ibms.application.usecase
 import com.puregoldbe.ibms.domain.error.DomainError
 import com.puregoldbe.ibms.domain.model.Account
 import com.puregoldbe.ibms.domain.model.CursorPage
+import com.puregoldbe.ibms.domain.model.DeepLinks
 import com.puregoldbe.ibms.domain.model.Store
 import com.puregoldbe.ibms.domain.model.StoreStatus
 import com.puregoldbe.ibms.domain.model.StoreUpsertRequest
@@ -65,7 +66,8 @@ class CreateStoreUseCase(
                     "Type" to store.storeType.name.lowercase(),
                 ),
                 entityId = store.id,
-                linkPath = "/stores/${store.id}",
+                actorId = actorId,
+                linkPath = DeepLinks.store(store.id),
             ),
         )
         store

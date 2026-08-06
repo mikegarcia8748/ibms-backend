@@ -45,6 +45,9 @@ fun testAppConfig(mutate: AppConfig.() -> AppConfig = { this }): AppConfig = App
     emailDelivery = EmailDelivery.LOG,
     smtp = null,
     appUrl = "http://localhost:8080",
+    // Deliberately a different origin from appUrl — requireCoherent() refuses a config
+    // where they match, because that is what points every email button at a JSON route.
+    webClientUrl = "http://localhost:8081",
     presignSecret = "test-presign-secret",
 ).mutate()
 

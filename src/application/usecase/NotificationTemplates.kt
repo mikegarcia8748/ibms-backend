@@ -1,5 +1,6 @@
 package com.puregoldbe.ibms.application.usecase
 
+import com.puregoldbe.ibms.domain.model.DeepLinks
 import com.puregoldbe.ibms.domain.model.NotificationContext
 import com.puregoldbe.ibms.domain.model.NotificationEvent
 
@@ -51,9 +52,9 @@ internal object NotificationTemplates {
     /** Marks a detail value as money, which is what earns it the emphasised styling. */
     private const val PESO = "₱"
 
-    fun render(event: NotificationEvent, ctx: NotificationContext, appUrl: String): Rendered {
+    fun render(event: NotificationEvent, ctx: NotificationContext, webClientUrl: String): Rendered {
         val subject = "[IBMS] ${event.label}"
-        val link = ctx.linkPath?.let { appUrl.trimEnd('/') + it }
+        val link = ctx.linkPath?.let { DeepLinks.absolute(webClientUrl, it) }
         val cta = "View ${ctaNoun(event)} in IBMS"
 
         val textLines = buildList {

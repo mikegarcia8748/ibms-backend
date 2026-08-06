@@ -1,6 +1,7 @@
 package com.puregoldbe.ibms.application
 
 import com.puregoldbe.ibms.application.usecase.NotificationTemplates
+import com.puregoldbe.ibms.domain.model.DeepLinks
 import com.puregoldbe.ibms.domain.model.NotificationContext
 import com.puregoldbe.ibms.domain.model.NotificationEvent
 import com.puregoldbe.ibms.domain.valueobject.Money
@@ -19,7 +20,8 @@ import io.kotest.matchers.string.shouldStartWith
 class NotificationTemplatesSpec : BehaviorSpec({
     isolationMode = IsolationMode.InstancePerLeaf
 
-    val appUrl = "https://ibms.example"
+    // The web client's origin, never this API's — see DeepLinks.
+    val webClientUrl = "https://ibms.example"
 
     Given("a compiled top sheet with the full five details") {
         val ctx = NotificationContext(
@@ -36,7 +38,7 @@ class NotificationTemplatesSpec : BehaviorSpec({
         )
 
         When("rendering") {
-            val rendered = NotificationTemplates.render(NotificationEvent.TOPSHEET_COMPILED, ctx, appUrl)
+            val rendered = NotificationTemplates.render(NotificationEvent.TOPSHEET_COMPILED, ctx, webClientUrl)
 
             Then("the subject keeps the [IBMS] + event label contract other specs pin") {
                 rendered.subject shouldBe "[IBMS] Topsheet compiled"
@@ -91,7 +93,7 @@ class NotificationTemplatesSpec : BehaviorSpec({
         )
 
         When("rendering") {
-            val rendered = NotificationTemplates.render(NotificationEvent.ACCOUNT_TERMINATED, ctx, appUrl)
+            val rendered = NotificationTemplates.render(NotificationEvent.ACCOUNT_TERMINATED, ctx, webClientUrl)
 
             Then("the lone cell spans both columns instead of leaving a ragged gap") {
                 rendered.html.split("colspan=\"2\"").size - 1 shouldBe 1
@@ -107,7 +109,7 @@ class NotificationTemplatesSpec : BehaviorSpec({
         val ctx = NotificationContext(headline = "New store added: SM North (Branch 119)")
 
         When("rendering") {
-            val rendered = NotificationTemplates.render(NotificationEvent.STORE_CREATED, ctx, appUrl)
+            val rendered = NotificationTemplates.render(NotificationEvent.STORE_CREATED, ctx, webClientUrl)
 
             Then("the detail card is omitted entirely") {
                 rendered.html shouldNotContain "background-color:#E2F4EE"
@@ -123,6 +125,66 @@ class NotificationTemplatesSpec : BehaviorSpec({
         }
     }
 
+    Given("a deep link carrying a query string") {
+        val ctx = NotificationContext(
+            headline = "Account details updated: 0917-000123",
+            linkPath = DeepLinks.accountActivity("acc-1"),
+        )
+
+        When("rendering") {
+            val rendered = NotificationTemplates.render(NotificationEvent.ACCOUNT_UPDATED, ctx, webClientUrl)
+
+            // The query survives HTML-escaping into the href, and the text alternative
+            // carries the raw URL a recipient can paste.
+            Then("the query reaches both the button and the plain-text line") {
+                rendered.html shouldContain "href=\"https://ibms.example/accounts/acc-1?tab=activity\""
+                rendered.text shouldContain "https://ibms.example/accounts/acc-1?tab=activity"
+            }
+        }
+    }
+
+    Given("a base URL written with a trailing slash") {
+        val ctx = NotificationContext(headline = "Topsheet compiled", linkPath = DeepLinks.topsheet("ts-1"))
+
+        When("rendering") {
+            val rendered = NotificationTemplates.render(NotificationEvent.TOPSHEET_COMPILED, ctx, "https://ibms.example/")
+
+            Then("the join produces exactly one slash") {
+                rendered.html shouldContain "https://ibms.example/topsheets/ts-1"
+                rendered.html shouldNotContain "https://ibms.example//"
+            }
+        }
+    }
+
+    Given("a context naming who performed the action") {
+        val ctx = NotificationContext(
+            headline = "New store added: SM North (Branch 119)",
+            actorName = "Michael Garcia",
+        )
+
+        When("rendering") {
+            val rendered = NotificationTemplates.render(NotificationEvent.STORE_CREATED, ctx, webClientUrl)
+
+            Then("the attribution appears in both alternatives") {
+                rendered.html shouldContain "Performed by Michael Garcia"
+                rendered.text shouldContain "Performed by: Michael Garcia"
+            }
+        }
+    }
+
+    Given("an actor name containing markup") {
+        val ctx = NotificationContext(headline = "New store added", actorName = "<img src=x onerror=alert(1)>")
+
+        When("rendering") {
+            val rendered = NotificationTemplates.render(NotificationEvent.STORE_CREATED, ctx, webClientUrl)
+
+            Then("it is escaped like every other caller-supplied string") {
+                rendered.html shouldNotContain "<img"
+                rendered.html shouldContain "&lt;img src=x onerror=alert(1)&gt;"
+            }
+        }
+    }
+
     Given("a store name containing markup") {
         val ctx = NotificationContext(
             headline = "New store added: <script>alert(1)</script> & co",
@@ -130,7 +192,7 @@ class NotificationTemplatesSpec : BehaviorSpec({
         )
 
         When("rendering") {
-            val rendered = NotificationTemplates.render(NotificationEvent.STORE_CREATED, ctx, appUrl)
+            val rendered = NotificationTemplates.render(NotificationEvent.STORE_CREATED, ctx, webClientUrl)
 
             Then("it is escaped rather than injected into the document") {
                 rendered.html shouldNotContain "<script>"

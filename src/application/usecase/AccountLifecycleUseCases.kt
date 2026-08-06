@@ -6,6 +6,7 @@ import com.puregoldbe.ibms.domain.model.AccountStatus
 import com.puregoldbe.ibms.domain.model.AccountUpsertRequest
 import com.puregoldbe.ibms.domain.model.AttachmentPurpose
 import com.puregoldbe.ibms.domain.model.CursorPage
+import com.puregoldbe.ibms.domain.model.DeepLinks
 import com.puregoldbe.ibms.domain.model.TransferRecord
 import com.puregoldbe.ibms.domain.model.NotificationContext
 import com.puregoldbe.ibms.domain.model.NotificationEvent
@@ -114,7 +115,10 @@ class TransferAccountUseCase(
                         "To store" to "${newStore.name} (Branch ${newStore.branchCode})",
                     ),
                     entityId = moved.id,
-                    linkPath = "/accounts/${moved.id}",
+                    actorId = actor,
+                    // The activity tab, not the account fields: what a reader wants here
+                    // is the move itself, which activity.record above just wrote.
+                    linkPath = DeepLinks.accountActivity(moved.id),
                 ),
             )
             moved
@@ -169,7 +173,8 @@ class DeactivateAccountUseCase(
                     headline = "Termination requested for account ${account.accountNumber}",
                     details = listOf("Account number" to account.accountNumber),
                     entityId = accountId,
-                    linkPath = "/accounts/$accountId",
+                    actorId = actorId,
+                    linkPath = DeepLinks.account(accountId),
                 ),
             )
             result

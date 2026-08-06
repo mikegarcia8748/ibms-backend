@@ -5,6 +5,7 @@ import com.puregoldbe.ibms.domain.model.Account
 import com.puregoldbe.ibms.domain.model.CompilableLine
 import com.puregoldbe.ibms.domain.model.CompilablePreview
 import com.puregoldbe.ibms.domain.model.CursorPage
+import com.puregoldbe.ibms.domain.model.DeepLinks
 import com.puregoldbe.ibms.domain.model.NotYetSubscribedLine
 import com.puregoldbe.ibms.domain.model.NotificationContext
 import com.puregoldbe.ibms.domain.model.NotificationEvent
@@ -477,7 +478,8 @@ class ReleaseToFinanceUseCase(
                     "Total Amount" to Money.display(released.totalAmount),
                 ),
                 entityId = topsheetId,
-                linkPath = "/topsheets/$topsheetId",
+                actorId = callerId,
+                linkPath = DeepLinks.topsheet(topsheetId),
             ),
         )
         released
@@ -622,7 +624,8 @@ class ConfirmTopSheetUseCase(
                         "Total Amount" to Money.display(confirmed.totalAmount),
                     ),
                     entityId = topsheetId,
-                    linkPath = "/topsheets/$topsheetId",
+                    actorId = confirmerId,
+                    linkPath = DeepLinks.topsheet(topsheetId),
                 ),
             )
             confirmed

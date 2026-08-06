@@ -1,6 +1,7 @@
 package com.puregoldbe.ibms.application.usecase
 
 import com.puregoldbe.ibms.domain.model.AccountStatus
+import com.puregoldbe.ibms.domain.model.DeepLinks
 import com.puregoldbe.ibms.domain.model.NotificationContext
 import com.puregoldbe.ibms.domain.model.NotificationEvent
 import com.puregoldbe.ibms.domain.port.AccountRepository
@@ -38,7 +39,9 @@ class ExpireGracePeriodAccountsUseCase(
                     headline = "Account ${account.accountNumber} terminated (30-day grace period elapsed)",
                     details = listOf("Account number" to account.accountNumber),
                     entityId = account.id,
-                    linkPath = "/accounts/${account.id}",
+                    // No actorId: the grace-expiry job has no acting user, so the email
+                    // renders no "Performed by" line, which is the honest answer.
+                    linkPath = DeepLinks.account(account.id),
                 ),
             )
         }

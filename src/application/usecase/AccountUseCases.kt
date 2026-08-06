@@ -6,6 +6,7 @@ import com.puregoldbe.ibms.domain.model.AccountStatus
 import com.puregoldbe.ibms.domain.model.AccountUpsertRequest
 import com.puregoldbe.ibms.domain.model.AttachmentPurpose
 import com.puregoldbe.ibms.domain.model.CursorPage
+import com.puregoldbe.ibms.domain.model.DeepLinks
 import com.puregoldbe.ibms.domain.model.NotificationContext
 import com.puregoldbe.ibms.domain.model.NotificationEvent
 import com.puregoldbe.ibms.domain.port.AccountRepository
@@ -87,7 +88,8 @@ class CreateAccountUseCase(
                     "MRC" to Money.display(account.rate),
                 ),
                 entityId = account.id,
-                linkPath = "/accounts/${account.id}",
+                actorId = actorId,
+                linkPath = DeepLinks.account(account.id),
             ),
         )
         account
@@ -98,22 +100,31 @@ class UpdateAccountUseCase(
     private val accounts: AccountRepository,
     private val providers: ProviderRepository,
     private val stores: StoreRepository,
+    private val activity: ActivityRecorder,
     private val notifications: NotificationEnqueuer,
     private val tx: TransactionRunner,
 ) {
-    suspend operator fun invoke(id: String, input: AccountUpsertRequest): Account = tx.inTransaction {
+    /**
+     * [actorId] has no default on purpose: a direct edit that records no actor is the
+     * bug this parameter was added to fix, and a default would let the next caller
+     * reintroduce it silently.
+     */
+    suspend operator fun invoke(id: String, input: AccountUpsertRequest, actorId: String?): Account = tx.inTransaction {
         if (input.accountNumber.isBlank()) throw DomainError.Validation("accountNumber is required")
         if (!Money.isPositive(input.rate)) throw DomainError.Validation("rate (MRC) must be greater than 0")
         providers.findById(input.providerId) ?: throw DomainError.Validation("unknown providerId ${input.providerId}")
         stores.findById(input.storeId) ?: throw DomainError.Validation("unknown storeId ${input.storeId}")
         val updated = accounts.update(id, input) ?: throw DomainError.NotFound("account $id not found")
+        activity.record(actorId, "account.updated", "account", updated.id)
         notifications.enqueue(
             NotificationEvent.ACCOUNT_UPDATED,
             NotificationContext(
                 headline = "Account details updated: ${updated.accountNumber}",
                 details = listOf("Account number" to updated.accountNumber),
                 entityId = updated.id,
-                linkPath = "/accounts/${updated.id}",
+                actorId = actorId,
+                // The activity tab, which the record above is what makes non-empty.
+                linkPath = DeepLinks.accountActivity(updated.id),
             ),
         )
         updated

@@ -8,6 +8,7 @@ import com.puregoldbe.ibms.domain.model.AccountStatus
 import com.puregoldbe.ibms.domain.model.AccountUpsertRequest
 import com.puregoldbe.ibms.domain.model.AttachmentPurpose
 import com.puregoldbe.ibms.domain.model.CursorPage
+import com.puregoldbe.ibms.domain.model.DeepLinks
 import com.puregoldbe.ibms.domain.model.FieldDiff
 import com.puregoldbe.ibms.domain.model.NotificationContext
 import com.puregoldbe.ibms.domain.model.NotificationEvent
@@ -185,7 +186,11 @@ class ApproveAccountChangeRequestUseCase(
                 headline = "Account details updated: ${account.accountNumber} (change request approved)",
                 details = listOf("Account number" to account.accountNumber),
                 entityId = request.accountId,
-                linkPath = "/accounts/${request.accountId}",
+                actorId = approverId,
+                // The diff view, not the account's activity tab: the approval activity is
+                // recorded against the *request* id, and the feed filters on entity id
+                // alone, so this change would never show up on the account's tab.
+                linkPath = DeepLinks.changeRequest(request.accountId, requestId),
             ),
         )
         approved
