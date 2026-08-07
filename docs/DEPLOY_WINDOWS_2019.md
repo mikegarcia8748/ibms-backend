@@ -128,7 +128,7 @@ With `APP_ENV=prod` the app **validates everything at startup and refuses to boo
 | `BOOTSTRAP_ADMIN_PASSWORD` | a strong one-time password | ✅ unless `BOOTSTRAP_ADMIN_AUTOGENERATE_PASSWORD=true` |
 | `BOOTSTRAP_ADMIN_AUTOGENERATE_PASSWORD` | `true` to generate one and log it once instead | prefer setting the password — the generated one lands in the service log |
 | `STORAGE_LOCAL_DIR` | `C:\ibms\storage` | |
-| `CORS_ALLOWED_HOSTS` | your Wasm client origin(s), comma-separated | ✅ (empty no longer falls back to any-host — it fails the boot) |
+| `CORS_ALLOWED_HOSTS` | your Wasm client origin(s), comma-separated — `host[:port]`, e.g. `ibms-client.your-domain.example` | ✅ (empty no longer falls back to any-host — it fails the boot) |
 | `APP_URL` | `https://ibms.your-domain.example` | ✅ (must be https and not localhost) |
 | `EMAIL_DELIVERY` | `smtp` for real delivery, `log` to only log | ✅ no default — choose deliberately |
 | `SMTP_HOST` | the org's internal mail relay | ✅ when `EMAIL_DELIVERY=smtp` |
@@ -176,7 +176,8 @@ In `C:\ibms\service\`, put `WinSW.NET4.exe` renamed to `ibms.exe`, alongside `ib
   <env name="BOOTSTRAP_ADMIN_USERNAME" value="mikepg"/>
   <env name="BOOTSTRAP_ADMIN_PASSWORD" value="CHANGE_ME_one_time_admin_password"/>
   <env name="STORAGE_LOCAL_DIR" value="C:\ibms\storage"/>
-  <env name="CORS_ALLOWED_HOSTS" value="https://ibms-client.your-domain.example"/>
+  <!-- host[:port]. A bare host allows http and https; prefix a scheme to pin one. -->
+  <env name="CORS_ALLOWED_HOSTS" value="ibms-client.your-domain.example"/>
   <env name="APP_URL" value="https://ibms.your-domain.example"/>
 
   <env name="EMAIL_DELIVERY" value="smtp"/>

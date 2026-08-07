@@ -226,7 +226,7 @@ fun Application.moduleWith(cfg: AppConfig) {
             this@moduleWith.log.warn("[security] CORS is open to any host (APP_ENV=dev).")
             anyHost()
         } else {
-            cfg.corsAllowedHosts.forEach { allowHost(it, schemes = listOf("http", "https")) }
+            cfg.corsOrigins().forEach { allowHost(it.host, schemes = it.schemes) }
         }
     }
     configureAuthentication(jwtService)
