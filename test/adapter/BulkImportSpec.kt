@@ -1,11 +1,14 @@
 package com.puregoldbe.ibms.adapter
 
 import com.puregoldbe.ibms.domain.model.UserRole
+import com.puregoldbe.ibms.support.PostgresTestDb
 import com.puregoldbe.ibms.support.signIn
 import com.puregoldbe.ibms.support.testModule
 import io.kotest.core.spec.style.BehaviorSpec
 import io.kotest.matchers.ints.shouldBeGreaterThanOrEqual
+import io.kotest.matchers.ints.shouldBeLessThanOrEqual
 import io.kotest.matchers.shouldBe
+import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 import io.ktor.client.request.*
 import io.ktor.client.request.forms.MultiPartFormDataContent
 import io.ktor.client.request.forms.formData
@@ -450,6 +453,188 @@ class BulkImportSpec : BehaviorSpec({
                     data2["accountsCreated"]!!.jsonPrimitive.int shouldBe 0
                     data2["accountsReused"]!!.jsonPrimitive.int shouldBe 1
                     data2["rowsFailed"]!!.jsonPrimitive.int shouldBe 1
+                }
+            }
+        }
+    }
+
+    // The reported bug, end to end. Note this asserts the APPLICATION-level fix (the import
+    // caches are keyed case-insensitively), which is what stops one file from minting two
+    // providers. Making a SECOND import unable to mint a case-variant of an existing provider
+    // additionally needs V25 (providers.name -> CITEXT); see docs/ops/.
+    Given("a sysadmin and an XLSX whose ISP/Provider column mixes casing") {
+        When("uploading it") {
+            Then("all rows land under one provider, reported once under its persisted name") {
+                testApplication {
+                    application { testModule() }
+                    val token = signIn(UserRole.SYSADMIN).token
+
+                    val xlsx = buildXlsx(
+                        listOf(
+                            listOf("CI-1", "CASE STORE 1", "CaseIsp", "SDWAN", "CI-ACC-1", "CI-1", "1/1/2025", 1000.0),
+                            listOf("CI-2", "CASE STORE 2", "CASEISP", "SDWAN", "CI-ACC-2", "CI-2", "1/1/2025", 1100.0),
+                            listOf("CI-3", "CASE STORE 3", "  caseisp  ", "SDWAN", "CI-ACC-3", "CI-3", "1/1/2025", 1200.0),
+                        ),
+                    )
+
+                    val data = uploadXlsx(token, xlsx).bodyAsText().asJson().data()
+                    val providers = data["providers"]!!.jsonArray
+                    providers.size shouldBe 1
+                    providers[0].jsonObject["name"]!!.jsonPrimitive.content shouldBe "CaseIsp"
+                    providers[0].jsonObject["accountsCreated"]!!.jsonPrimitive.int shouldBe 3
+                    data["accountsCreated"]!!.jsonPrimitive.int shouldBe 3
+                }
+            }
+        }
+    }
+
+    Given("a sysadmin re-importing a file whose Monthly Recurring Amount changed") {
+        When("uploading the corrected sheet") {
+            Then("the stored rate is refreshed and counted as updated, not reused") {
+                testApplication {
+                    application { testModule() }
+                    val token = signIn(UserRole.SYSADMIN).token
+
+                    fun sheet(rate: Any) = buildXlsx(
+                        listOf(listOf("RR-1", "RATE STORE", "RateIsp", "SDWAN", "RR-ACC-1", "RR-1", "1/1/2025", rate)),
+                    )
+
+                    uploadXlsx(token, sheet(1000.0)).bodyAsText().asJson().data()["accountsCreated"]!!
+                        .jsonPrimitive.int shouldBe 1
+
+                    // Same amount expressed differently: equal as money, so nothing is written.
+                    val same = uploadXlsx(token, sheet("1,000.00")).bodyAsText().asJson().data()
+                    same["accountsReused"]!!.jsonPrimitive.int shouldBe 1
+                    same["accountsUpdated"]!!.jsonPrimitive.int shouldBe 0
+
+                    val changed = uploadXlsx(token, sheet(1750.5)).bodyAsText().asJson().data()
+                    changed["accountsUpdated"]!!.jsonPrimitive.int shouldBe 1
+                    changed["accountsReused"]!!.jsonPrimitive.int shouldBe 0
+                    changed["accountsCreated"]!!.jsonPrimitive.int shouldBe 0
+
+                    // And it sticks: a third import at the new rate is a plain reuse.
+                    val settled = uploadXlsx(token, sheet(1750.5)).bodyAsText().asJson().data()
+                    settled["accountsReused"]!!.jsonPrimitive.int shouldBe 1
+                    settled["accountsUpdated"]!!.jsonPrimitive.int shouldBe 0
+                }
+            }
+        }
+    }
+
+    Given("a sysadmin importing repeatedly") {
+        When("running three imports in a row") {
+            Then("the shared placeholder attachment is resolved, never re-created") {
+                testApplication {
+                    application { testModule() }
+                    val token = signIn(UserRole.SYSADMIN).token
+
+                    fun placeholderCount(): Int = transaction(PostgresTestDb.database) {
+                        exec(
+                            "SELECT count(*) FROM attachments WHERE storage_key = " +
+                                "'bulk-import/placeholder-installation-proof'",
+                        ) { rs -> rs.next(); rs.getInt(1) }!!
+                    }
+
+                    val before = placeholderCount()
+                    repeat(3) { i ->
+                        uploadXlsx(
+                            token,
+                            buildXlsx(
+                                listOf(listOf("PH-$i", "PH STORE $i", "PhIsp", "SDWAN", "PH-ACC-$i", "PH-$i", "1/1/2025", 900.0)),
+                            ),
+                        )
+                    }
+                    // At most one new row across all three runs, regardless of the starting count.
+                    (placeholderCount() - before) shouldBeLessThanOrEqual 1
+                }
+            }
+        }
+    }
+
+    Given("a non-sysadmin caller") {
+        When("posting to /accounts/bulk-import") {
+            Then("it is rejected — the endpoint is sysadmin-only") {
+                testApplication {
+                    application { testModule() }
+                    val xlsx = buildXlsx(
+                        listOf(listOf("AZ-1", "AZ STORE", "AzIsp", "SDWAN", "AZ-ACC-1", "AZ-1", "1/1/2025", 100.0)),
+                    )
+                    uploadXlsx(signIn(UserRole.SECRETARY).token, xlsx).status shouldBe HttpStatusCode.Forbidden
+                    uploadXlsx(signIn(UserRole.FINANCE).token, xlsx).status shouldBe HttpStatusCode.Forbidden
+                }
+            }
+        }
+        When("posting without a token") {
+            Then("it is unauthorized") {
+                testApplication {
+                    application { testModule() }
+                    val resp = client.post("/accounts/bulk-import") {
+                        setBody(
+                            MultiPartFormDataContent(
+                                formData {
+                                    append("file", ByteArray(0), Headers.build {
+                                        append(HttpHeaders.ContentDisposition, "filename=x.xlsx")
+                                    })
+                                },
+                            ),
+                        )
+                    }
+                    resp.status shouldBe HttpStatusCode.Unauthorized
+                }
+            }
+        }
+    }
+
+    Given("a sysadmin and an ambiguous slash date") {
+        When("uploading with the default order and again with dateOrder=dmy") {
+            // That the two orders yield DIFFERENT dates is asserted precisely in the unit spec;
+            // this covers the query parameter being accepted and threaded through to the summary.
+            Then("both orders are accepted and each reports the row as ambiguous") {
+                testApplication {
+                    application { testModule() }
+                    val token = signIn(UserRole.SYSADMIN).token
+                    val xlsx = buildXlsx(
+                        listOf(listOf("DO-1", "DATE STORE", "DateIsp", "SDWAN", "DO-ACC-1", "DO-1", "05/06/2025", 100.0)),
+                    )
+
+                    val mdy = uploadXlsx(token, xlsx).bodyAsText().asJson().data()
+                    mdy["warnings"]!!.jsonArray.size shouldBe 1
+
+                    val resp = client.post("/accounts/bulk-import?dateOrder=dmy") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                        setBody(
+                            MultiPartFormDataContent(
+                                formData {
+                                    append("file", xlsx, Headers.build {
+                                        append(HttpHeaders.ContentDisposition, "filename=bulk-import.xlsx")
+                                    })
+                                },
+                            ),
+                        )
+                    }
+                    resp.status shouldBe HttpStatusCode.OK
+                    resp.bodyAsText().asJson().data()["warnings"]!!.jsonArray.size shouldBe 1
+                }
+            }
+        }
+        When("uploading with an unrecognised dateOrder") {
+            Then("it is a 400, not a silent default") {
+                testApplication {
+                    application { testModule() }
+                    val token = signIn(UserRole.SYSADMIN).token
+                    val resp = client.post("/accounts/bulk-import?dateOrder=ymd") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                        setBody(
+                            MultiPartFormDataContent(
+                                formData {
+                                    append("file", buildXlsx(emptyList()), Headers.build {
+                                        append(HttpHeaders.ContentDisposition, "filename=bulk-import.xlsx")
+                                    })
+                                },
+                            ),
+                        )
+                    }
+                    resp.status shouldBe HttpStatusCode.BadRequest
                 }
             }
         }

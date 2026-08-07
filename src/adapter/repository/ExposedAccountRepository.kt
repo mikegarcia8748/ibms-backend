@@ -21,6 +21,7 @@ import com.puregoldbe.ibms.domain.model.AccountListItem
 import com.puregoldbe.ibms.domain.model.AccountProofLink
 import com.puregoldbe.ibms.domain.model.AttachmentPurpose
 import com.puregoldbe.ibms.domain.model.CursorPage
+import com.puregoldbe.ibms.domain.model.Money
 import com.puregoldbe.ibms.domain.model.AccountUpsertRequest
 import com.puregoldbe.ibms.domain.model.ProviderAccountSummary
 import com.puregoldbe.ibms.domain.model.StoreStatus
@@ -71,22 +72,36 @@ class ExposedAccountRepository : AccountRepository {
             .toCursorPage(limit) { it.id }
     }
 
+    /** The single predicate behind both [existsByIdentity] and [findByIdentity]. */
+    private fun identityOf(storeId: String, providerId: String, accountNumber: String, circuitId: String?): Op<Boolean> {
+        val core = (Accounts.storeId eq storeId.toUuid()) and
+            (Accounts.providerId eq providerId.toUuid()) and
+            (Accounts.accountNumber eq accountNumber) and
+            (Accounts.status notInList listOf(AccountStatus.TRANSFERRED, AccountStatus.INACTIVE))
+        // Mirror the DB's COALESCE(circuit_id,'') unique index: a null/blank
+        // circuit matches rows whose circuit is null or empty.
+        return if (circuitId.isNullOrBlank()) {
+            core and (Accounts.circuitId.isNull() or (Accounts.circuitId eq ""))
+        } else {
+            core and (Accounts.circuitId eq circuitId)
+        }
+    }
+
     override fun existsByIdentity(storeId: String, providerId: String, accountNumber: String, circuitId: String?): Boolean =
         Accounts.selectAll()
-            .where {
-                val core = (Accounts.storeId eq storeId.toUuid()) and
-                    (Accounts.providerId eq providerId.toUuid()) and
-                    (Accounts.accountNumber eq accountNumber) and
-                    (Accounts.status notInList listOf(AccountStatus.TRANSFERRED, AccountStatus.INACTIVE))
-                // Mirror the DB's COALESCE(circuit_id,'') unique index: a null/blank
-                // circuit matches rows whose circuit is null or empty.
-                if (circuitId.isNullOrBlank()) {
-                    core and (Accounts.circuitId.isNull() or (Accounts.circuitId eq ""))
-                } else {
-                    core and (Accounts.circuitId eq circuitId)
-                }
-            }
-            .count() > 0
+            .where { identityOf(storeId, providerId, accountNumber, circuitId) }
+            .limit(1)
+            .any()
+
+    override fun findByIdentity(storeId: String, providerId: String, accountNumber: String, circuitId: String?): Account? =
+        Accounts.selectAll()
+            .where { identityOf(storeId, providerId, accountNumber, circuitId) }
+            // The identity is backed by uq_account_identity_active, so at most one row can
+            // match — but order for determinism if a legacy row ever slipped past it.
+            .orderBy(Accounts.createdAt to SortOrder.ASC, Accounts.id to SortOrder.ASC)
+            .limit(1)
+            .map { it.toAccount(proofIdsFor(it[Accounts.id].value)) }
+            .singleOrNull()
 
     override fun create(input: AccountUpsertRequest, createdBy: String?): Account {
         val newId = Accounts.insertAndGetId { row ->
@@ -137,6 +152,14 @@ class ExposedAccountRepository : AccountRepository {
             row[Accounts.installationDate] = input.installationDate.jt()
             row[Accounts.billingPeriodLabel] = input.billingPeriodLabel
         }
+        return if (updated == 0) null else findById(id)
+    }
+
+    override fun updateRate(id: String, rate: Money): Account? {
+        val uuid = id.toUuidOrNull() ?: return null
+        // Only `rate`. See the port doc: `update` above is a full replace and would null
+        // every field the caller omits.
+        val updated = Accounts.update({ Accounts.id eq uuid }) { it[Accounts.rate] = rate.toMoney() }
         return if (updated == 0) null else findById(id)
     }
 

@@ -44,7 +44,10 @@ class ExposedProviderRepository : ProviderRepository {
 
     override fun create(name: String, paymentScheduleDay: Int): Provider {
         val id = Providers.insertAndGetId {
-            it[Providers.name] = name
+            // Last line before the DB: ck_providers_name_trimmed (V24) rejects untrimmed
+            // names with a check violation, which would surface as a 500 rather than a
+            // validation error. Callers normalize via NameNormalizer; this catches the rest.
+            it[Providers.name] = name.trim()
             it[Providers.paymentScheduleDay] = paymentScheduleDay.toShort()
         }.value
         return findById(id.toString())!!
