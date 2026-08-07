@@ -128,7 +128,7 @@ With `APP_ENV=prod` the app **validates everything at startup and refuses to boo
 | `BOOTSTRAP_ADMIN_PASSWORD` | a strong one-time password | ✅ unless `BOOTSTRAP_ADMIN_AUTOGENERATE_PASSWORD=true` |
 | `BOOTSTRAP_ADMIN_AUTOGENERATE_PASSWORD` | `true` to generate one and log it once instead | prefer setting the password — the generated one lands in the service log |
 | `STORAGE_LOCAL_DIR` | `C:\ibms\storage` | |
-| `CORS_ALLOWED_HOSTS` | your Wasm client host(s), comma-separated, **bare `host[:port]` with no scheme** | ✅ (empty no longer falls back to any-host — it fails the boot; a scheme is also rejected) |
+| `CORS_ALLOWED_HOSTS` | your Wasm client origin(s), comma-separated — `host[:port]` (e.g. `ibms-client.your-domain.example`), or a full origin such as `https://ibms-client.your-domain.example` | ✅ (empty no longer falls back to any-host — it fails the boot) |
 | `APP_URL` | `https://ibms.your-domain.example` | ✅ (must be https and not localhost) — **this API's own origin** |
 | `WEB_CLIENT_URL` | `https://ibms-client.your-domain.example` | ✅ (https, not localhost, and **must differ from `APP_URL`**) — the web client's origin, which notification email buttons open |
 | `EMAIL_DELIVERY` | `smtp` for real delivery, `log` to only log | ✅ no default — choose deliberately |
@@ -177,7 +177,7 @@ In `C:\ibms\service\`, put `WinSW.NET4.exe` renamed to `ibms.exe`, alongside `ib
   <env name="BOOTSTRAP_ADMIN_USERNAME" value="mikepg"/>
   <env name="BOOTSTRAP_ADMIN_PASSWORD" value="CHANGE_ME_one_time_admin_password"/>
   <env name="STORAGE_LOCAL_DIR" value="C:\ibms\storage"/>
-  <!-- Bare host, no scheme: Ktor rejects "https://host" and the boot fails. -->
+  <!-- host[:port]. A bare host allows http and https; prefix a scheme to pin one. -->
   <env name="CORS_ALLOWED_HOSTS" value="ibms-client.your-domain.example"/>
   <env name="APP_URL" value="https://ibms.your-domain.example"/>
   <env name="WEB_CLIENT_URL" value="https://ibms-client.your-domain.example"/>

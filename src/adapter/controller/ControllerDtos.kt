@@ -76,6 +76,14 @@ data class UpdateUserEmailRequest(val email: String? = null)
  * required fields, invalid/zero amount). `rowsFailed`/`failureReasons` are rows that
  * passed validation but threw while committing to the DB — the import is partial:
  * valid rows commit and failed rows are reported here rather than aborting the run.
+ *
+ * `warnings` are rows that imported SUCCESSFULLY but whose source data is suspect and
+ * cannot be validated from the file alone — an ambiguous slash-date that would read
+ * differently under the other day/month order, or an identity column Excel already
+ * rounded because it was stored as a number. They are advisory: nothing was rejected.
+ *
+ * `accountsReused` means "matched an existing account and nothing changed";
+ * `accountsUpdated` means "matched, and a differing rate was refreshed from the sheet".
  */
 @Serializable
 data class BulkImportSummary(
@@ -89,6 +97,8 @@ data class BulkImportSummary(
     val totalRows: Int,
     val rowsFailed: Int = 0,
     val failureReasons: List<String> = emptyList(),
+    val accountsUpdated: Int = 0,
+    val warnings: List<String> = emptyList(),
 )
 
 @Serializable
@@ -97,6 +107,7 @@ data class ProviderImportSummary(
     val created: Boolean,
     val accountsCreated: Int,
     val accountsReused: Int,
+    val accountsUpdated: Int = 0,
 )
 
 @Serializable

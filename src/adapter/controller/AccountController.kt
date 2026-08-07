@@ -5,6 +5,7 @@ import com.puregoldbe.ibms.application.usecase.BulkImportAccountsUseCase
 import com.puregoldbe.ibms.application.usecase.CancelDeactivationUseCase
 import com.puregoldbe.ibms.application.usecase.CreateAccountUseCase
 import com.puregoldbe.ibms.application.usecase.CreateISPAccountUseCase
+import com.puregoldbe.ibms.application.usecase.DateOrder
 import com.puregoldbe.ibms.application.usecase.DeactivateAccountUseCase
 import com.puregoldbe.ibms.application.usecase.GetAccountUseCase
 import com.puregoldbe.ibms.application.usecase.ListAccountProofsUseCase
@@ -77,7 +78,15 @@ fun Route.accountRoutes(
                 part.dispose()
             }
             val bytes = fileBytes ?: throw DomainError.Validation("file is required")
-            call.ok(bulkImport(bytes, caller.userId), "bulk import completed")
+            // Slash dates like 05/06/2025 are genuinely ambiguous and both readings parse, so
+            // the convention has to come from the operator. Defaults to MDY, the previous
+            // (implicit) behaviour; ambiguous rows are reported in the summary's `warnings`.
+            val dateOrder = when (val raw = call.request.queryParameters["dateOrder"]?.trim()?.lowercase()) {
+                null, "", "mdy" -> DateOrder.MDY
+                "dmy" -> DateOrder.DMY
+                else -> throw DomainError.Validation("dateOrder must be 'mdy' or 'dmy', got '$raw'")
+            }
+            call.ok(bulkImport(bytes, caller.userId, dateOrder), "bulk import completed")
         }
         put("/{id}") {
             val caller = call.authorize(UserRole.SECRETARY, UserRole.FINANCE)

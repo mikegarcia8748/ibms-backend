@@ -6,6 +6,15 @@ build/
 # Local env & secrets
 .env
 
+# Java keystores/truststores. The certificates the app must trust are committed as
+# PEM under certs/ and loaded in-process (see certs/README.md); a .jks is a local
+# convenience for the -Djavax.net.ssl.trustStore route, never the source of truth.
+# Keeping them out also means a keystore holding a private key can't land here by
+# accident.
+*.jks
+*.p12
+*.keystore
+
 # Local attachment storage (StorageService local-disk adapter)
 storage/
 

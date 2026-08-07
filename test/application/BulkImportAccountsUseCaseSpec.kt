@@ -1,6 +1,7 @@
 package com.puregoldbe.ibms.application
 
 import com.puregoldbe.ibms.application.usecase.BulkImportAccountsUseCase
+import com.puregoldbe.ibms.application.usecase.DateOrder
 import com.puregoldbe.ibms.domain.error.DomainError
 import com.puregoldbe.ibms.domain.model.Account
 import com.puregoldbe.ibms.domain.model.AccountUpsertRequest
@@ -29,8 +30,19 @@ import io.mockk.slot
 import io.mockk.verify
 import kotlinx.datetime.Instant
 import kotlinx.datetime.LocalDate
+import org.apache.poi.xssf.usermodel.XSSFFormulaEvaluator
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import java.io.ByteArrayOutputStream
+
+/** A cell holding a formula; the fixture builder evaluates it so a cached result exists. */
+private class Formula(val expr: String)
+
+/**
+ * A numeric cell whose stored `<v>` text is set verbatim, bypassing POI's Double round-trip.
+ * This is how Excel actually writes a long account number, and the only way to reproduce a
+ * value with more significant digits than a Double can carry.
+ */
+private class RawNumeric(val digits: String)
 
 /** Canonical 8-column header expected by the importer. */
 private val HEADERS = listOf(
@@ -57,6 +69,22 @@ private fun sampleStore(req: StoreUpsertRequest) = Store(
     branchCode = req.branchCode,
     name = req.name,
     proofOfInstallationId = req.proofOfInstallationId,
+    createdAt = Instant.fromEpochSeconds(0),
+)
+
+/** An account already in the DB, as findLiveByIdentity would return it. */
+private fun sampleExistingAccount(
+    accountNumber: String = "ACC001",
+    rate: String = "1500",
+    id: String = "acc-existing",
+) = Account(
+    id = id,
+    accountNumber = accountNumber,
+    circuitId = "IC-001",
+    providerId = "prov-Globe",
+    storeId = "store-118",
+    rate = rate,
+    installationDate = LocalDate(2024, 11, 20),
     createdAt = Instant.fromEpochSeconds(0),
 )
 
@@ -102,13 +130,18 @@ class BulkImportAccountsUseCaseSpec : BehaviorSpec({
     val accountReq = slot<AccountUpsertRequest>()
 
     // ---- Default "everything is new" stubs (overridden per-Given as needed) ----
+    every { attachments.findByStorageKey(any()) } returns null
     every { attachments.create(any(), any(), any(), any(), any(), any(), any()) } returns proofAttachment()
     every { providers.findByName(any()) } returns null
     every { providers.create(any(), any()) } answers { sampleProvider(firstArg()) }
     every { stores.findByBranchCode(any()) } returns null
     every { stores.create(capture(storeReq), any()) } answers { sampleStore(firstArg()) }
-    every { accounts.existsByIdentity(any(), any(), any(), any()) } returns false
+    every { accounts.findLiveByIdentity(any(), any(), any(), any()) } returns null
     every { accounts.create(capture(accountReq), any()) } answers { sampleAccount(firstArg()) }
+    every { accounts.updateRate(any(), any()) } answers { sampleAccount(AccountUpsertRequest(
+        accountNumber = "ACC001", providerId = "prov-1", storeId = "store-1",
+        rate = secondArg(), installationDate = LocalDate(1970, 1, 1),
+    )) }
 
     // ---- XLSX fixture builders ----
 
@@ -142,10 +175,17 @@ class BulkImportAccountsUseCaseSpec : BehaviorSpec({
                         is String -> r.createCell(ci).setCellValue(v)
                         is Double -> r.createCell(ci).setCellValue(v)
                         is Int -> r.createCell(ci).setCellValue(v.toDouble())
+                        is Formula -> r.createCell(ci).cellFormula = v.expr
+                        // Write the raw <v> directly: setCellValue(Double) would round the
+                        // digits away before they ever reach the file.
+                        is RawNumeric -> r.createCell(ci).ctCell.v = v.digits
                         else -> r.createCell(ci).setCellValue(v.toString())
                     }
                 }
             }
+            // Populate cached formula results, as Excel would have on save. Without this a
+            // formula cell has no cached type and the importer has nothing to read.
+            XSSFFormulaEvaluator.evaluateAllFormulaCells(wb)
             val out = ByteArrayOutputStream()
             wb.write(out)
             return out.toByteArray()
@@ -369,12 +409,16 @@ class BulkImportAccountsUseCaseSpec : BehaviorSpec({
         val bytes = xlsx(rows = listOf(row()))
         When("importing") {
             val result = useCase(bytes, "actor")
-            Then("the provider is reused, not created, and sequences are not seeded") {
+            Then("the provider is reused, not created, and its sequences are re-seeded defensively") {
                 result.providers.size shouldBe 1
                 result.providers[0].created shouldBe false
                 verify(exactly = 0) { providers.create(any(), any()) }
-                verify(exactly = 0) { sequences.seed(any(), any()) }
-                verify(exactly = 0) { batchSequences.seed(any()) }
+                // Both seeds are insertIgnore, so re-seeding an existing provider is a no-op --
+                // but a provider created outside CreateProviderUseCase can be missing its
+                // invoice_sequences row, and nextValue() throws on that rather than self-healing
+                // the way the batch counter does. Cheap insurance against a compile-time failure.
+                verify(exactly = 1) { sequences.seed("prov-existing", "GLOB-") }
+                verify(exactly = 1) { batchSequences.seed("prov-existing") }
             }
         }
     }
@@ -397,16 +441,20 @@ class BulkImportAccountsUseCaseSpec : BehaviorSpec({
         }
     }
 
-    Given("an account whose identity (store, provider, account no, circuit) already exists") {
-        every { accounts.existsByIdentity(any(), any(), "ACC001", any()) } returns true
+    Given("an account whose identity (store, provider, account no, circuit) already exists at the same rate") {
+        // "1500.00" vs the sheet's "1500": equal as money, so nothing should be written.
+        every { accounts.findLiveByIdentity(any(), any(), "ACC001", any()) } returns
+            sampleExistingAccount(accountNumber = "ACC001", rate = "1500.00")
         val bytes = xlsx(rows = listOf(row(accountNo = "ACC001")))
         When("importing") {
             val result = useCase(bytes, "actor")
-            Then("the account is reused; no create, no activity recorded") {
+            Then("the account is reused; no create, no rate update, no activity recorded") {
                 result.accountsReused shouldBe 1
                 result.accountsCreated shouldBe 0
+                result.accountsUpdated shouldBe 0
                 result.providers[0].accountsReused shouldBe 1
                 verify(exactly = 0) { accounts.create(any(), any()) }
+                verify(exactly = 0) { accounts.updateRate(any(), any()) }
                 verify(exactly = 0) { activity.record(any(), any(), any(), any(), any()) }
             }
         }
@@ -590,7 +638,7 @@ class BulkImportAccountsUseCaseSpec : BehaviorSpec({
             useCase(bytes, "actor")
             Then("it is read without a trailing .0") {
                 accountReq.captured.accountNumber shouldBe "123456"
-                verify { accounts.existsByIdentity(any(), any(), "123456", any()) }
+                verify { accounts.findLiveByIdentity(any(), any(), "123456", any()) }
             }
         }
     }
@@ -632,6 +680,272 @@ class BulkImportAccountsUseCaseSpec : BehaviorSpec({
                 result.accountsCreated shouldBe 0
                 result.failureReasons.size shouldBe 1
                 result.failureReasons.first() shouldContain "db down"
+            }
+        }
+    }
+
+    // ======================================================================
+    //  J. Provider names are matched case-insensitively
+    // ======================================================================
+    // The reported bug: "Converge" and "CONVERGE" used to become two providers, which is
+    // not cosmetic -- uq_account_identity_active is scoped by provider_id, so the same
+    // circuit under both spellings is not a duplicate and gets billed twice.
+    Given("one file whose ISP/Provider column mixes casing and inner whitespace") {
+        val bytes = xlsx(
+            rows = listOf(
+                row(provider = "Converge", accountNo = "A1", circuitId = "C1"),
+                row(provider = "CONVERGE", accountNo = "A2", circuitId = "C2"),
+                row(provider = "  converge  ", accountNo = "A3", circuitId = "C3"),
+            ),
+        )
+        When("importing") {
+            val result = useCase(bytes, "actor")
+            Then("all three rows resolve to ONE provider, looked up and created once") {
+                result.providers.size shouldBe 1
+                result.providers[0].accountsCreated shouldBe 3
+                verify(exactly = 1) { providers.findByName(any()) }
+                verify(exactly = 1) { providers.create(any(), any()) }
+            }
+            Then("the summary reports the provider's PERSISTED name, not the cell text") {
+                // First spelling wins and is what providers.create stored.
+                result.providers[0].name shouldBe "Converge"
+            }
+        }
+    }
+
+    Given("a provider that already exists under different casing") {
+        every { providers.findByName(any()) } returns sampleProvider("Converge", id = "prov-existing")
+        val bytes = xlsx(rows = listOf(row(provider = "CONVERGE")))
+        When("importing") {
+            val result = useCase(bytes, "actor")
+            Then("it is reused rather than created a second time") {
+                result.providers.single().created shouldBe false
+                verify(exactly = 0) { providers.create(any(), any()) }
+            }
+            Then("lookup uses the canonical display form, leaving casing to the DB") {
+                // Normalization collapses whitespace but preserves case; citext (V25) does
+                // the case folding, so the argument is the cell's own spelling.
+                verify { providers.findByName("CONVERGE") }
+            }
+        }
+    }
+
+    Given("store codes differing only by case and whitespace") {
+        val bytes = xlsx(
+            rows = listOf(
+                row(storeCode = "qi-central", accountNo = "A1"),
+                row(storeCode = "QI-Central", accountNo = "A2"),
+                row(storeCode = " QI-CENTRAL ", accountNo = "A3"),
+            ),
+        )
+        When("importing") {
+            val result = useCase(bytes, "actor")
+            Then("they collapse to one store, created once under the folded code") {
+                result.storesCreated shouldBe 1
+                verify(exactly = 1) { stores.create(any(), any()) }
+                storeReq.captured.branchCode shouldBe "QI-CENTRAL"
+            }
+        }
+    }
+
+    // ======================================================================
+    //  K. Formula cells
+    // ======================================================================
+    // Reading a numeric-result formula with stringCellValue throws IllegalStateException.
+    // It escaped parseWorkbook, missed every StatusPages handler and answered 500 for the
+    // WHOLE import -- defeating the per-row isolation the rest of the design provides.
+    Given("a Monthly Recurring Amount supplied as a formula with a numeric result") {
+        val bytes = xlsx(rows = listOf(row(mrc = Formula("1200*2"))))
+        When("importing") {
+            val result = useCase(bytes, "actor")
+            Then("the formula's cached value is used and nothing is skipped or failed") {
+                result.rowsSkipped shouldBe 0
+                result.rowsFailed shouldBe 0
+                result.accountsCreated shouldBe 1
+                accountReq.captured.rate shouldBe "2400"
+            }
+        }
+    }
+
+    Given("an Account No supplied as a formula with a string result") {
+        val bytes = xlsx(rows = listOf(row(accountNo = Formula("""CONCATENATE("ACC","777")"""))))
+        When("importing") {
+            val result = useCase(bytes, "actor")
+            Then("the cached string result is used") {
+                result.accountsCreated shouldBe 1
+                accountReq.captured.accountNumber shouldBe "ACC777"
+            }
+        }
+    }
+
+    Given("a formula whose cached result is an error") {
+        val bytes = xlsx(rows = listOf(row(mrc = Formula("1/0"))))
+        When("importing") {
+            val result = useCase(bytes, "actor")
+            Then("the row is skipped as an invalid amount rather than throwing") {
+                result.rowsSkipped shouldBe 1
+                result.rowsFailed shouldBe 0
+                result.skipReasons.single() shouldContain "Monthly Recurring Amount"
+            }
+        }
+    }
+
+    // ======================================================================
+    //  L. Numeric identity columns keep every digit
+    // ======================================================================
+    Given("an 18-digit Account No stored in a numeric cell") {
+        val bytes = xlsx(rows = listOf(row(accountNo = RawNumeric("123456789012345678"))))
+        When("importing") {
+            val result = useCase(bytes, "actor")
+            Then("every digit survives -- no Double rounding, no scientific notation") {
+                accountReq.captured.accountNumber shouldBe "123456789012345678"
+            }
+            Then("a warning flags that Excel itself may already have rounded it") {
+                result.warnings.size shouldBe 1
+                result.warnings.single() shouldContain "Format that column as Text"
+            }
+        }
+    }
+
+    Given("a very large Account No that used to render in scientific notation") {
+        val bytes = xlsx(rows = listOf(row(accountNo = RawNumeric("100000000000000000000"))))
+        When("importing") {
+            useCase(bytes, "actor")
+            Then("it is written in plain notation") {
+                accountReq.captured.accountNumber shouldBe "100000000000000000000"
+            }
+        }
+    }
+
+    Given("an ordinary short numeric Account No") {
+        val bytes = xlsx(rows = listOf(row(accountNo = 123456.0)))
+        When("importing") {
+            val result = useCase(bytes, "actor")
+            Then("no lossy-column warning is raised") {
+                result.warnings shouldBe emptyList()
+            }
+        }
+    }
+
+    // ======================================================================
+    //  M. Ambiguous slash dates
+    // ======================================================================
+    // contractStartDate anchors TopSheet proration, so a misread date becomes a wrong
+    // charge. Both readings of 05/06/2025 parse cleanly, so neither can be detected as
+    // wrong -- the operator picks the convention and ambiguous rows are reported.
+    Given("a slash date that is valid under BOTH day/month orders") {
+        val bytes = xlsx(rows = listOf(row(startDate = "05/06/2025")))
+        When("importing with the default MDY order") {
+            val result = useCase(bytes, "actor")
+            Then("it reads as May 6 and the row is flagged as ambiguous") {
+                accountReq.captured.contractStartDate shouldBe LocalDate(2025, 5, 6)
+                result.warnings.single() shouldContain "ambiguous"
+                result.warnings.single() shouldContain "2025-06-05"
+            }
+        }
+        When("importing with DMY order") {
+            val result = useCase(bytes, "actor", DateOrder.DMY)
+            Then("it reads as June 5 and is still flagged") {
+                accountReq.captured.contractStartDate shouldBe LocalDate(2025, 6, 5)
+                result.warnings.single() shouldContain "ambiguous"
+            }
+        }
+    }
+
+    Given("a slash date whose components cannot be swapped") {
+        val bytes = xlsx(rows = listOf(row(startDate = "11/20/2024")))
+        When("importing with the default MDY order") {
+            val result = useCase(bytes, "actor")
+            Then("it parses with no warning -- 20 cannot be a month") {
+                accountReq.captured.contractStartDate shouldBe LocalDate(2024, 11, 20)
+                result.warnings shouldBe emptyList()
+            }
+        }
+    }
+
+    Given("a day-first date read under MDY order") {
+        val bytes = xlsx(rows = listOf(row(startDate = "13/05/2024")))
+        When("importing") {
+            val result = useCase(bytes, "actor")
+            Then("the other order is used as a fallback rather than the epoch sentinel") {
+                accountReq.captured.contractStartDate shouldBe LocalDate(2024, 5, 13)
+                accountReq.captured.notes shouldBe null
+            }
+            Then("the fallback is reported") {
+                result.warnings.single() shouldContain "not a valid MDY date"
+            }
+        }
+    }
+
+    Given("a date where both components are equal") {
+        val bytes = xlsx(rows = listOf(row(startDate = "05/05/2025")))
+        When("importing") {
+            val result = useCase(bytes, "actor")
+            Then("no warning is raised -- both orders give the same day") {
+                accountReq.captured.contractStartDate shouldBe LocalDate(2025, 5, 5)
+                result.warnings shouldBe emptyList()
+            }
+        }
+    }
+
+    // ======================================================================
+    //  N. The shared placeholder attachment is resolved, not re-created
+    // ======================================================================
+    Given("a placeholder attachment that already exists from a previous import") {
+        every { attachments.findByStorageKey(BulkImportAccountsUseCase.PLACEHOLDER_STORAGE_KEY) } returns
+            proofAttachment(id = "att-existing")
+        val bytes = xlsx(rows = listOf(row()))
+        When("importing") {
+            useCase(bytes, "actor")
+            Then("it is reused and no second row is created") {
+                verify(exactly = 0) { attachments.create(any(), any(), any(), any(), any(), any(), any()) }
+                storeReq.captured.proofOfInstallationId shouldBe "att-existing"
+            }
+        }
+    }
+
+    Given("no placeholder attachment yet") {
+        val bytes = xlsx(rows = listOf(row()))
+        When("importing") {
+            useCase(bytes, "actor")
+            Then("exactly one is created, under the fixed storage key") {
+                verify(exactly = 1) {
+                    attachments.create(
+                        any(), any(), any(),
+                        BulkImportAccountsUseCase.PLACEHOLDER_STORAGE_KEY,
+                        any(), any(), any(),
+                    )
+                }
+            }
+        }
+    }
+
+    // ======================================================================
+    //  O. Re-import refreshes a changed rate
+    // ======================================================================
+    Given("an existing account whose Monthly Recurring Amount has changed in the sheet") {
+        every { accounts.findLiveByIdentity(any(), any(), "ACC001", any()) } returns
+            sampleExistingAccount(rate = "1500")
+        val bytes = xlsx(rows = listOf(row(mrc = 1800.0)))
+        When("importing") {
+            val result = useCase(bytes, "actor")
+            Then("the rate is refreshed and counted separately from a plain reuse") {
+                result.accountsUpdated shouldBe 1
+                result.accountsReused shouldBe 0
+                result.accountsCreated shouldBe 0
+                result.providers[0].accountsUpdated shouldBe 1
+                verify(exactly = 1) { accounts.updateRate("acc-existing", "1800") }
+            }
+            Then("the change is recorded with both values") {
+                verify {
+                    activity.record(
+                        "actor", "account.bulk_import_rate_updated", "account", "acc-existing",
+                        "rate 1500.00 -> 1800.00",
+                    )
+                }
+            }
+            Then("the full-replace update is NOT used -- it would null six unrelated fields") {
+                verify(exactly = 0) { accounts.update(any(), any()) }
             }
         }
     }

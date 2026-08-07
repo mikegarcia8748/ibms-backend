@@ -35,6 +35,41 @@ private inline fun <reified T : Enum<T>> Table.pgEnum(columnName: String, pgType
         toDb = { PGEnumValue(pgTypeName, it) },
     )
 
+// ---- CITEXT (case-insensitive text) ------------------------------------------
+// Binding a Kotlin String sends Oid.VARCHAR (pgjdbc's default when the JDBC URL sets
+// no `stringtype`). Postgres then resolves `citext = varchar` by the IMPLICIT
+// citext->text cast to the case-SENSITIVE `=(text,text)` -- the text/varchar->citext
+// direction is assignment-only, so `=(citext,citext)` is discarded during operator
+// resolution. Verified:
+//
+//     'Converge'::citext = 'CONVERGE'            -- t  (unknown literal)
+//     'Converge'::citext = 'CONVERGE'::varchar   -- f  <- what a plain `eq` sends
+//
+// So a citext column queried with a plain String would still match case-sensitively
+// AND could not use the citext unique index. Wrapping the value in a PGobject tagged
+// 'citext' keeps the comparison on citext = citext -- same trick as PGEnumValue above.
+private class PGCitextValue(text: String?) : PGobject() {
+    init {
+        value = text
+        type = "citext"
+    }
+}
+
+private class CitextColumnType : TextColumnType() {
+    override fun sqlType(): String = "CITEXT"
+    override fun notNullValueToDB(value: String): Any = PGCitextValue(value)
+    override fun nonNullValueToString(value: String): String = "'${value.replace("'", "''")}'::citext"
+}
+
+/**
+ * A `CITEXT` column: compares and dedupes case-insensitively in the database.
+ *
+ * Safe to declare before the column is actually migrated to CITEXT — a citext-bound
+ * parameter against a still-TEXT column resolves via the implicit citext->text cast to
+ * exactly the previous behaviour, so this can ship ahead of the migration.
+ */
+private fun Table.citext(name: String): Column<String> = registerColumn(name, CitextColumnType())
+
 object Users : UUIDTable("users") {
     val username              = text("username").uniqueIndex()
     val email                 = text("email").nullable()
@@ -69,7 +104,8 @@ object Sessions : UUIDTable("sessions") {
 }
 
 object Providers : UUIDTable("providers") {
-    val name               = text("name").uniqueIndex()
+    // CITEXT as of V24: "Converge" and "CONVERGE" are one provider, enforced by the DB.
+    val name               = citext("name").uniqueIndex()
     val paymentScheduleDay = short("payment_schedule_day")
     val status             = pgEnum<ProviderStatus>("status", "provider_status")
     val deactivatedAt      = timestamp("deactivated_at").nullable()

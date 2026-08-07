@@ -3,6 +3,7 @@ package com.puregoldbe.ibms.infrastructure
 import com.puregoldbe.ibms.infrastructure.config.AppConfig
 import com.puregoldbe.ibms.infrastructure.config.AppEnv
 import com.puregoldbe.ibms.infrastructure.config.ConfigException
+import com.puregoldbe.ibms.infrastructure.config.CorsOrigin
 import com.puregoldbe.ibms.infrastructure.config.EmailDelivery
 import io.kotest.assertions.throwables.shouldNotThrowAny
 import io.kotest.assertions.throwables.shouldThrow
@@ -188,6 +189,32 @@ class AppConfigSpec : BehaviorSpec({
         When("CORS_ALLOWED_HOSTS is empty in dev") {
             Then("any-host is allowed, as a local convenience") {
                 AppConfig.fromEnv(dev()).corsAllowedHosts shouldBe emptyList()
+            }
+        }
+        // Ktor's allowHost() throws on a host containing "://", so a full origin here
+        // used to kill the app during plugin install — after config validation passed.
+        When("an entry is written as a full origin") {
+            Then("the scheme is split off, and it narrows the entry to that scheme") {
+                val cfg = AppConfig.fromEnv(prod("CORS_ALLOWED_HOSTS" to "https://client.example.com"))
+                cfg.corsOrigins() shouldBe listOf(CorsOrigin("client.example.com", listOf("https")))
+            }
+        }
+        When("an entry is a bare host") {
+            Then("either scheme is allowed") {
+                val cfg = AppConfig.fromEnv(prod("CORS_ALLOWED_HOSTS" to "client.example.com:8081"))
+                cfg.corsOrigins() shouldBe listOf(CorsOrigin("client.example.com:8081", listOf("http", "https")))
+            }
+        }
+        When("an entry carries a trailing slash or path") {
+            Then("only the authority survives — allowHost matches on that alone") {
+                val cfg = AppConfig.fromEnv(prod("CORS_ALLOWED_HOSTS" to "https://client.example.com/, other.example.com"))
+                cfg.corsOrigins().map { it.host } shouldBe listOf("client.example.com", "other.example.com")
+            }
+        }
+        When("an entry normalises to no host at all") {
+            Then("it is reported at boot instead of installing a rule that matches nothing") {
+                val ex = shouldThrow<ConfigException> { AppConfig.fromEnv(prod("CORS_ALLOWED_HOSTS" to "https://")) }
+                ex.message!! shouldContain "CORS_ALLOWED_HOSTS"
             }
         }
     }

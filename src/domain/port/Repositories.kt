@@ -104,6 +104,18 @@ interface AttachmentRepository {
     fun findAllById(ids: List<String>): List<Attachment>
 
     fun exists(id: String): Boolean
+
+    /**
+     * The oldest attachment stored under [storageKey], or null.
+     *
+     * Only for rows whose storage key is a fixed constant rather than a per-upload path —
+     * today just the bulk-import placeholder, which must be resolved rather than re-created
+     * on every run. `storage_key` is not unique (real uploads mint their own paths and
+     * historical placeholder duplicates exist), so this deliberately returns the oldest
+     * match rather than asserting a single row.
+     */
+    fun findByStorageKey(storageKey: String): Attachment?
+
     fun create(
         purpose: AttachmentPurpose,
         entityType: String?,
@@ -167,15 +179,30 @@ interface AccountRepository {
 
     /**
      * The live account holding this identity, or null. Same rule as [existsByIdentity] —
-     * this is the primitive, that one is the predicate over it. Callers use this when the
-     * conflict message needs to say WHICH account is in the way: with one account number
-     * legitimately recurring across stores and circuits, "already exists" alone leaves the
-     * operator guessing, and an account sitting out its 30-day termination grace still
-     * occupies the slot without being active.
+     * this is the primitive, that one is the predicate over it, so the two cannot drift.
+     *
+     * Callers use this when the conflict message needs to say WHICH account is in the way:
+     * with one account number legitimately recurring across stores and circuits, "already
+     * exists" alone leaves the operator guessing, and an account sitting out its 30-day
+     * termination grace still occupies the slot without being active. Bulk import uses it
+     * for a second reason — it needs the row itself to tell "matched and unchanged" from
+     * "matched with a rate that moved".
      */
     fun findLiveByIdentity(storeId: String, providerId: String, accountNumber: String, circuitId: String?): Account?
+
     fun create(input: AccountUpsertRequest, createdBy: String?): Account
     fun update(id: String, input: AccountUpsertRequest): Account?
+
+    /**
+     * Update ONLY the monthly recurring charge.
+     *
+     * Deliberately not [update]: that is a full replace which nulls `planName`, `speed`,
+     * `contractDurationMonths`, `contractEndDate`, `installationFee` and
+     * `billingPeriodLabel` when the caller does not supply them. Bulk import carries none
+     * of those, so using [update] to refresh a rate would silently wipe data entered
+     * through the account-edit and ISP-creation flows.
+     */
+    fun updateRate(id: String, rate: Money): Account?
 
     /** Active accounts on a given store (used when closing a store -> floating). */
     fun listActiveByStore(storeId: String): List<Account>

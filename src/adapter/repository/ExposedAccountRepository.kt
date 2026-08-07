@@ -21,6 +21,7 @@ import com.puregoldbe.ibms.domain.model.AccountListItem
 import com.puregoldbe.ibms.domain.model.AccountProofLink
 import com.puregoldbe.ibms.domain.model.AttachmentPurpose
 import com.puregoldbe.ibms.domain.model.CursorPage
+import com.puregoldbe.ibms.domain.model.Money
 import com.puregoldbe.ibms.domain.model.AccountUpsertRequest
 import com.puregoldbe.ibms.domain.model.ProviderAccountSummary
 import com.puregoldbe.ibms.domain.model.StoreStatus
@@ -108,9 +109,12 @@ class ExposedAccountRepository : AccountRepository {
                     core and (Accounts.circuitId.trim().lowerCase() eq circuit.lowercase())
                 }
             }
-            // The identity is unique among live rows by index, so at most one row can
-            // match; firstOrNull rather than singleOrNull so a legacy pre-normalization
-            // duplicate reports the conflict instead of throwing.
+            // Ordered for determinism: the identity is unique among live rows by
+            // index, so at most one row can match — but a legacy pre-normalization
+            // duplicate must resolve to the same row every time it is reported.
+            .orderBy(Accounts.createdAt to SortOrder.ASC, Accounts.id to SortOrder.ASC)
+            // firstOrNull rather than singleOrNull so such a duplicate reports the
+            // conflict instead of throwing.
             .firstOrNull()
             ?.let { it.toAccount(proofIdsFor(it[Accounts.id].value)) }
     }
@@ -167,6 +171,14 @@ class ExposedAccountRepository : AccountRepository {
             row[Accounts.installationDate] = input.installationDate.jt()
             row[Accounts.billingPeriodLabel] = input.billingPeriodLabel
         }
+        return if (updated == 0) null else findById(id)
+    }
+
+    override fun updateRate(id: String, rate: Money): Account? {
+        val uuid = id.toUuidOrNull() ?: return null
+        // Only `rate`. See the port doc: `update` above is a full replace and would null
+        // every field the caller omits.
+        val updated = Accounts.update({ Accounts.id eq uuid }) { it[Accounts.rate] = rate.toMoney() }
         return if (updated == 0) null else findById(id)
     }
 
