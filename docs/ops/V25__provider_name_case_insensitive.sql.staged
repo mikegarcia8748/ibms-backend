@@ -1,0 +1,327 @@
+-- =====================================================================
+--  STAGED -- NOT YET ACTIVE.
+--
+--  This file is deliberately NOT in resources/db/migration/ and carries a
+--  `.staged` suffix so Flyway cannot pick it up. Promote it only after
+--  docs/ops/provider-duplicate-preflight.sql reports 0 in all three collision
+--  columns against PRODUCTION:
+--
+--      git mv docs/ops/V25__provider_name_case_insensitive.sql.staged \
+--             resources/db/migration/V25__provider_name_case_insensitive.sql
+--
+--  Why the gate: this migration aborts (by design) when merging would corrupt
+--  billing identity, and a Flyway failure blocks application startup. An abort is
+--  safe for the data and bad for the deploy, so the collisions get resolved
+--  BEFORE promotion, never during.
+--
+-- =====================================================================
+--  Provider names become case-insensitive.
+--
+--  providers.name has been TEXT NOT NULL UNIQUE since V1 and
+--  ExposedProviderRepository.findByName compares with a plain `=`, so
+--  BulkImportAccountsUseCase.ensureProvider("CONVERGE") never saw the existing
+--  "Converge" row and created a second provider. From that moment one ISP has two
+--  identities: two account sets, two invoice_sequences, two batch_sequences, two
+--  topsheet streams -- and because InvoiceNumberFormatter.acronym() uppercases,
+--  BOTH mint invoice numbers with the same 'CONV-' prefix from counters that each
+--  start at 1. Worse, uq_account_identity_active is scoped by provider_id, so the
+--  same circuit under both spellings is not a duplicate: it is billed twice.
+--
+--  Three phases in one transaction:
+--    1. refuse to run if the merge would corrupt billing identity (3 guards),
+--    2. merge each duplicate group into its oldest member,
+--    3. make the column CITEXT so the database enforces the rule from here on.
+--
+--  Flyway wraps each migration in a single transaction, so the temp table below is
+--  scoped to this migration and every statement agrees on one survivor. The whole
+--  file is also a copy-pasteable dry run: `BEGIN; \i <file>; ROLLBACK;` against a
+--  production snapshot reports exactly what the deploy would do, at zero risk.
+--  Nothing here is non-transactional (no CONCURRENTLY, no COMMIT).
+--
+--  REQUIRES the matching application change (CitextColumnType in ExposedTables.kt).
+--  Exposed binds a Kotlin String as VARCHAR, and Postgres resolves `citext = varchar`
+--  through the implicit citext->text cast to the case-SENSITIVE `=(text,text)`. So
+--  without that change this migration is inert AND ensureProvider("CONVERGE") would
+--  still miss "Converge", then hit the now-case-insensitive unique constraint --
+--  turning silent duplication into every row of that provider failing. Ship both
+--  together. (The app change alone is safe to ship early: a citext-bound parameter
+--  against the still-TEXT column resolves to today's exact behaviour.)
+-- =====================================================================
+
+-- ---------------------------------------------------------------------
+--  1. The merge map.
+--
+--  Key is lower(btrim(name)): CITEXT folds case but NOT surrounding whitespace, so
+--  'Converge ' would survive the ALTER below as a second row and reopen the same
+--  hole. Whitespace is collapsed here and then held closed by
+--  ck_providers_name_trimmed. lower() and citext agree on case folding, so the
+--  merge key is never coarser than the unique index rebuilt in phase 3.
+--
+--  Survivor = the OLDEST row in the group. Age is the right rule: the oldest row is
+--  the one Finance has been billing against -- it holds the issued invoice numbers
+--  and the topsheet history. The newer row is the accident.
+-- ---------------------------------------------------------------------
+CREATE TEMP TABLE provider_merge_map ON COMMIT DROP AS
+WITH grp AS (
+    SELECT id, name, created_at, legacy_id,
+           lower(btrim(name))                              AS merge_key,
+           first_value(id) OVER w                          AS survivor_id,
+           count(*) OVER (PARTITION BY lower(btrim(name)))  AS group_size
+      FROM providers
+    WINDOW w AS (PARTITION BY lower(btrim(name)) ORDER BY created_at, id)
+)
+SELECT id         AS loser_id,
+       name       AS loser_name,
+       created_at AS loser_created_at,
+       legacy_id  AS loser_legacy_id,
+       survivor_id,
+       merge_key
+  FROM grp
+ WHERE group_size > 1
+   AND id <> survivor_id;
+
+-- ---------------------------------------------------------------------
+--  2a. GUARD -- accounts vs uq_account_identity_active (V16).
+-- ---------------------------------------------------------------------
+DO $guard_accounts$
+DECLARE detail text;
+BEGIN
+    WITH repointed AS (
+        SELECT a.id, a.store_id, a.account_number,
+               COALESCE(a.circuit_id, '')             AS circ,
+               COALESCE(m.survivor_id, a.provider_id) AS new_provider_id,
+               a.provider_id                          AS old_provider_id
+          FROM accounts a
+          LEFT JOIN provider_merge_map m ON m.loser_id = a.provider_id
+         WHERE a.status NOT IN ('transferred', 'inactive')   -- = the index predicate
+    )
+    SELECT string_agg(x.line, E'\n' ORDER BY x.line) INTO detail
+      FROM (
+        SELECT format('  store=%s account=%s circuit="%s" spellings=%s account_ids=%s',
+                      r.store_id, r.account_number, r.circ,
+                      array_agg(DISTINCT p.name ORDER BY p.name),
+                      array_agg(r.id ORDER BY r.id)) AS line
+          FROM repointed r
+          JOIN providers p ON p.id = r.old_provider_id
+         GROUP BY r.new_provider_id, r.store_id, r.account_number, r.circ
+        HAVING count(*) > 1
+      ) x;
+
+    IF detail IS NOT NULL THEN
+        RAISE EXCEPTION E'V25 aborted: the merge would violate uq_account_identity_active (V16).\n%\n\nThe same (store, account number, circuit) is LIVE under both spellings of one provider -- one circuit recorded twice, billable twice. Resolving that is a business decision, not one for a migration. Run docs/ops/provider-duplicate-preflight.sql, apply the reviewed statements from its section 8, then redeploy.', detail;
+    END IF;
+END
+$guard_accounts$;
+
+-- ---------------------------------------------------------------------
+--  2b. GUARD -- topsheets vs uq_topsheet_invoice_per_provider (V22).
+--
+--  An ISSUED invoice number cannot be renumbered: Finance holds it on paper and
+--  against a cheque. So a group whose two spellings both issued invoices must NOT
+--  be merged at all -- the names get disambiguated instead.
+-- ---------------------------------------------------------------------
+DO $guard_invoice$
+DECLARE detail text;
+BEGIN
+    WITH repointed AS (
+        SELECT t.id, t.invoice_number,
+               COALESCE(m.survivor_id, t.provider_id) AS new_provider_id
+          FROM topsheets t
+          LEFT JOIN provider_merge_map m ON m.loser_id = t.provider_id
+         WHERE t.provider_id    IS NOT NULL
+           AND t.invoice_number IS NOT NULL   -- NULLs are distinct in the index (drafts)
+    )
+    SELECT string_agg(x.line, E'\n' ORDER BY x.line) INTO detail
+      FROM (
+        SELECT format('  invoice %s would exist %s times under provider %s (topsheets %s)',
+                      r.invoice_number, count(*), r.new_provider_id,
+                      array_agg(r.id ORDER BY r.id)) AS line
+          FROM repointed r
+         GROUP BY r.new_provider_id, r.invoice_number
+        HAVING count(*) > 1
+      ) x;
+
+    IF detail IS NOT NULL THEN
+        RAISE EXCEPTION E'V25 aborted: the merge would violate uq_topsheet_invoice_per_provider (V22).\n%\n\nBoth spellings issued invoice numbers from their own counter under the same acronym prefix. Issued numbers cannot be renumbered, so this group must NOT be merged: give the two providers genuinely distinct names (PATCH /providers/{id}) and redeploy.', detail;
+    END IF;
+END
+$guard_invoice$;
+
+-- ---------------------------------------------------------------------
+--  2c. GUARD -- drafts vs uq_draft_per_provider_period (V11).
+--
+--  Drafts are unconfirmed, but they are a secretary's in-progress work, so the app
+--  cancels or confirms one. The migration does not delete it.
+-- ---------------------------------------------------------------------
+DO $guard_draft$
+DECLARE detail text;
+BEGIN
+    WITH repointed AS (
+        SELECT t.id, t.billing_period,
+               COALESCE(m.survivor_id, t.provider_id) AS new_provider_id
+          FROM topsheets t
+          LEFT JOIN provider_merge_map m ON m.loser_id = t.provider_id
+         WHERE t.status = 'draft' AND t.provider_id IS NOT NULL
+    )
+    SELECT string_agg(x.line, E'\n' ORDER BY x.line) INTO detail
+      FROM (
+        SELECT format('  provider %s period %s has %s drafts (topsheets %s)',
+                      r.new_provider_id, r.billing_period, count(*),
+                      array_agg(r.id ORDER BY r.id)) AS line
+          FROM repointed r
+         GROUP BY r.new_provider_id, r.billing_period
+        HAVING count(*) > 1
+      ) x;
+
+    IF detail IS NOT NULL THEN
+        RAISE EXCEPTION E'V25 aborted: the merge would violate uq_draft_per_provider_period (V11).\n%\n\nBoth spellings hold a DRAFT topsheet for the same billing period. Cancel or confirm one of them in the app, then redeploy.', detail;
+    END IF;
+END
+$guard_draft$;
+
+-- ---------------------------------------------------------------------
+--  3. Audit record.
+--
+--  The loser rows are DELETED below and accounts carry no provider-name snapshot,
+--  so without this there would be no way to tell afterwards which accounts came
+--  from "CONVERGE". Recording the loser id makes a manual un-merge possible.
+-- ---------------------------------------------------------------------
+CREATE TABLE provider_merges (
+    id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    survivor_id           UUID NOT NULL REFERENCES providers (id),
+    loser_id              UUID NOT NULL,          -- no FK on purpose: the row is deleted below
+    loser_name            TEXT NOT NULL,
+    loser_created_at      TIMESTAMPTZ NOT NULL,
+    loser_legacy_id       TEXT,
+    moved_accounts        UUID[] NOT NULL,
+    moved_topsheets       UUID[] NOT NULL,
+    moved_ocr_templates   UUID[] NOT NULL,
+    moved_ocr_batches     UUID[] NOT NULL,
+    moved_change_requests UUID[] NOT NULL,
+    invoice_value_before  INT,
+    invoice_value_after   INT,
+    batch_value_before    INT,
+    batch_value_after     INT,
+    merged_at             TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+COMMENT ON TABLE provider_merges IS
+    'One row per provider absorbed by V25 (case/whitespace duplicate). Written once by the migration, never by the application; the only record of where the moved rows came from.';
+
+INSERT INTO provider_merges (
+    survivor_id, loser_id, loser_name, loser_created_at, loser_legacy_id,
+    moved_accounts, moved_topsheets, moved_ocr_templates, moved_ocr_batches,
+    moved_change_requests, invoice_value_before, batch_value_before)
+SELECT m.survivor_id, m.loser_id, m.loser_name, m.loser_created_at, m.loser_legacy_id,
+       COALESCE((SELECT array_agg(a.id) FROM accounts a                WHERE a.provider_id     = m.loser_id), '{}'::uuid[]),
+       COALESCE((SELECT array_agg(t.id) FROM topsheets t               WHERE t.provider_id     = m.loser_id), '{}'::uuid[]),
+       COALESCE((SELECT array_agg(o.id) FROM ocr_templates o           WHERE o.provider_id     = m.loser_id), '{}'::uuid[]),
+       COALESCE((SELECT array_agg(b.id) FROM ocr_batches b             WHERE b.provider_id     = m.loser_id), '{}'::uuid[]),
+       COALESCE((SELECT array_agg(r.id) FROM account_change_requests r WHERE r.provider_id_new = m.loser_id), '{}'::uuid[]),
+       (SELECT s.current_value FROM invoice_sequences s WHERE s.provider_id = m.survivor_id),
+       (SELECT b.current_value FROM batch_sequences  b WHERE b.provider_id = m.survivor_id)
+  FROM provider_merge_map m;
+
+-- ---------------------------------------------------------------------
+--  4. Sequences. Both tables are PK'd on provider_id, so they MERGE rather than
+--     repoint, and the survivor's counter must become the GROUP MAXIMUM.
+--
+--  These counters are monotonic per provider; the period only appears in the
+--  formatted string. If the loser is ahead (survivor=6, loser=9) and we kept 6, the
+--  next three confirms would re-mint CONV-YYYYMM-0007..0009 -- numbers already
+--  printed on the loser's topsheets, which after the repoint sit under the SAME
+--  provider_id. For invoices that is an immediate 23505 blocking Finance. For batch
+--  numbers it is worse: batch_number has only a plain index (V9), so a reused batch
+--  number raises nothing and two topsheets silently share one. MAX is the only
+--  value that can never re-issue.
+--
+--  Prefix: for a case/whitespace duplicate group acronym() is identical by
+--  construction (it trims and uppercases), so the survivor's prefix is already the
+--  group's prefix.
+-- ---------------------------------------------------------------------
+
+-- V12 seeded every provider, but a hand-inserted one may have no row.
+INSERT INTO invoice_sequences (provider_id, prefix, current_value)
+SELECT DISTINCT ON (m.survivor_id) m.survivor_id, l.prefix, 0
+  FROM provider_merge_map m
+  JOIN invoice_sequences l ON l.provider_id = m.loser_id
+ WHERE NOT EXISTS (SELECT 1 FROM invoice_sequences s WHERE s.provider_id = m.survivor_id)
+ ORDER BY m.survivor_id, l.current_value DESC
+    ON CONFLICT (provider_id) DO NOTHING;
+
+INSERT INTO batch_sequences (provider_id, current_value)
+SELECT DISTINCT m.survivor_id, 0
+  FROM provider_merge_map m
+ WHERE NOT EXISTS (SELECT 1 FROM batch_sequences b WHERE b.provider_id = m.survivor_id)
+    ON CONFLICT (provider_id) DO NOTHING;
+
+UPDATE invoice_sequences s
+   SET current_value = g.max_value
+  FROM (SELECT m.survivor_id, max(l.current_value) AS max_value
+          FROM provider_merge_map m
+          JOIN invoice_sequences l ON l.provider_id = m.loser_id
+         GROUP BY m.survivor_id) g
+ WHERE s.provider_id = g.survivor_id
+   AND s.current_value < g.max_value;
+
+UPDATE batch_sequences s
+   SET current_value = g.max_value
+  FROM (SELECT m.survivor_id, max(l.current_value) AS max_value
+          FROM provider_merge_map m
+          JOIN batch_sequences l ON l.provider_id = m.loser_id
+         GROUP BY m.survivor_id) g
+ WHERE s.provider_id = g.survivor_id
+   AND s.current_value < g.max_value;
+
+DELETE FROM invoice_sequences WHERE provider_id IN (SELECT loser_id FROM provider_merge_map);
+DELETE FROM batch_sequences   WHERE provider_id IN (SELECT loser_id FROM provider_merge_map);
+
+-- The table was created in this migration, so every row is ours.
+UPDATE provider_merges pm
+   SET invoice_value_after = (SELECT s.current_value FROM invoice_sequences s WHERE s.provider_id = pm.survivor_id),
+       batch_value_after   = (SELECT b.current_value FROM batch_sequences  b WHERE b.provider_id = pm.survivor_id);
+
+-- ---------------------------------------------------------------------
+--  5. Repoint the five remaining FK holders.
+--
+--  accounts.updated_at is touched by trg_accounts_touch. Left alone on purpose:
+--  the account's provider genuinely changed, so "modified now" is true.
+--
+--  topsheets.provider_name is NOT rewritten. It is a compile-time snapshot of what
+--  was printed on that document; rewriting it would falsify an audit trail. The
+--  invoice prefix comes from invoice_sequences.prefix, not from this column, so the
+--  merged provider keeps minting correctly.
+-- ---------------------------------------------------------------------
+UPDATE accounts a                SET provider_id     = m.survivor_id FROM provider_merge_map m WHERE a.provider_id     = m.loser_id;
+UPDATE topsheets t               SET provider_id     = m.survivor_id FROM provider_merge_map m WHERE t.provider_id     = m.loser_id;
+UPDATE ocr_templates o           SET provider_id     = m.survivor_id FROM provider_merge_map m WHERE o.provider_id     = m.loser_id;
+UPDATE ocr_batches b             SET provider_id     = m.survivor_id FROM provider_merge_map m WHERE b.provider_id     = m.loser_id;
+UPDATE account_change_requests r SET provider_id_new = m.survivor_id FROM provider_merge_map m WHERE r.provider_id_new = m.loser_id;
+
+-- All seven FKs referencing providers.id were enumerated at V23 (five above plus
+-- the two sequence tables handled in phase 4), and every one is NO ACTION. If a
+-- later migration adds another and this file is replayed on a newer schema, the
+-- DELETE fails loudly rather than cascading -- which is the behaviour we want.
+DELETE FROM providers p USING provider_merge_map m WHERE p.id = m.loser_id;
+
+-- ---------------------------------------------------------------------
+--  6. Enforce it from here on.
+--
+--  ALTER COLUMN TYPE rebuilds every index on the column from its original
+--  definition, so the V1 UNIQUE constraint providers_name_key is regenerated with
+--  citext's operator class and becomes case-insensitive by itself: no DROP/CREATE,
+--  the constraint name survives. That rebuild is also a second fail-closed layer --
+--  any case-duplicate that somehow survived the merge fails here with 23505.
+--  text -> citext is binary-coercible, so the heap is not rewritten; the lock is
+--  ACCESS EXCLUSIVE, which on a handful of provider rows is instant.
+--
+--  CITEXT folds case but not whitespace, so the trim is normalised once and then
+--  pinned by a CHECK -- mirroring users_username_format from V6, where the app
+--  validates for a readable error and the database is the last line of defence.
+-- ---------------------------------------------------------------------
+UPDATE providers SET name = btrim(name) WHERE name <> btrim(name);
+
+ALTER TABLE providers ALTER COLUMN name TYPE CITEXT;
+
+ALTER TABLE providers
+    ADD CONSTRAINT ck_providers_name_trimmed CHECK (name::text = btrim(name::text));

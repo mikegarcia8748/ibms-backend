@@ -32,6 +32,14 @@ class ExposedAttachmentRepository : AttachmentRepository {
         return Attachments.selectAll().where { Attachments.id eq uuid }.count() > 0
     }
 
+    override fun findByStorageKey(storageKey: String): Attachment? =
+        Attachments.selectAll()
+            .where { Attachments.storageKey eq storageKey }
+            .orderBy(Attachments.createdAt to SortOrder.ASC, Attachments.id to SortOrder.ASC)
+            .limit(1)
+            .map { it.toAttachment() }
+            .singleOrNull()
+
     override fun markUploaded(id: String, sizeBytes: Long, contentType: String) {
         val uuid = id.toUuidOrNull() ?: return
         Attachments.update({ Attachments.id eq uuid }) {

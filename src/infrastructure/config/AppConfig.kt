@@ -85,6 +85,31 @@ data class SmtpConfig(
     val trustedCertPath: String? = null,
 )
 
+/**
+ * One entry of `CORS_ALLOWED_HOSTS`, split the way Ktor's `CORSConfig.allowHost` wants
+ * it: the authority on its own, the scheme as a separate argument.
+ */
+data class CorsOrigin(val host: String, val schemes: List<String>) {
+    companion object {
+        private val BOTH_SCHEMES = listOf("http", "https")
+
+        /**
+         * Accepts either a bare authority (`client.example.com:8081`) or a full origin
+         * (`https://client.example.com`). The full form is the natural reading of
+         * "allowed origin" — and what the deploy doc used to show — but handing it
+         * straight to `allowHost` throws *scheme should be specified as a separate
+         * parameter* while the CORS plugin installs, so the app never finishes booting.
+         * Normalising here keeps both spellings working; an explicit scheme narrows the
+         * entry to that scheme, a bare host allows either.
+         */
+        fun parse(entry: String): CorsOrigin {
+            val scheme = entry.substringBefore("://", missingDelimiterValue = "").trim().lowercase()
+            val host = entry.substringAfter("://").substringBefore('/').trim()
+            return CorsOrigin(host, if (scheme.isEmpty()) BOTH_SCHEMES else listOf(scheme))
+        }
+    }
+}
+
 data class AppConfig(
     val appEnv: AppEnv,
     val db: DbConfig,
@@ -103,6 +128,9 @@ data class AppConfig(
      */
     val presignSecret: String,
 ) {
+    /** [corsAllowedHosts] in the shape the CORS plugin takes. See [CorsOrigin]. */
+    fun corsOrigins(): List<CorsOrigin> = corsAllowedHosts.map(CorsOrigin::parse)
+
     /**
      * Re-checks the fail-closed invariants that [fromEnv] enforces, so a hand-built
      * config (tests, or a future non-env source) cannot smuggle a fail-open
@@ -155,6 +183,14 @@ data class AppConfig(
                 "CORS_ALLOWED_HOSTS: must list at least one origin when APP_ENV=${appEnv.name.lowercase()} " +
                     "(CORS will not fall back to any-host)",
             )
+            // An entry that normalises to nothing (`https://`, a stray comma's leftovers)
+            // would install as a host that matches no request — a silent CORS outage.
+            corsAllowedHosts.forEach { entry ->
+                check(
+                    CorsOrigin.parse(entry).host.isNotBlank(),
+                    "CORS_ALLOWED_HOSTS: \"$entry\" has no host — expected host[:port], optionally with a scheme",
+                )
+            }
 
             val appUrl =
                 if (hardened) required("APP_URL", "the public base URL clients and presigned links resolve against")

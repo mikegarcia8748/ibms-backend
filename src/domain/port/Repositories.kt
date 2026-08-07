@@ -104,6 +104,18 @@ interface AttachmentRepository {
     fun findAllById(ids: List<String>): List<Attachment>
 
     fun exists(id: String): Boolean
+
+    /**
+     * The oldest attachment stored under [storageKey], or null.
+     *
+     * Only for rows whose storage key is a fixed constant rather than a per-upload path —
+     * today just the bulk-import placeholder, which must be resolved rather than re-created
+     * on every run. `storage_key` is not unique (real uploads mint their own paths and
+     * historical placeholder duplicates exist), so this deliberately returns the oldest
+     * match rather than asserting a single row.
+     */
+    fun findByStorageKey(storageKey: String): Attachment?
+
     fun create(
         purpose: AttachmentPurpose,
         entityType: String?,
@@ -152,8 +164,29 @@ interface AccountRepository {
      * by store lets the same account number recur across stores as distinct accounts.
      */
     fun existsByIdentity(storeId: String, providerId: String, accountNumber: String, circuitId: String?): Boolean
+
+    /**
+     * The LIVE account with this identity, or null — same predicate as [existsByIdentity],
+     * which is defined in terms of this so the two can never drift.
+     *
+     * Bulk import needs the row itself, not just its existence, to tell "matched and
+     * unchanged" from "matched with a rate that moved".
+     */
+    fun findByIdentity(storeId: String, providerId: String, accountNumber: String, circuitId: String?): Account?
+
     fun create(input: AccountUpsertRequest, createdBy: String?): Account
     fun update(id: String, input: AccountUpsertRequest): Account?
+
+    /**
+     * Update ONLY the monthly recurring charge.
+     *
+     * Deliberately not [update]: that is a full replace which nulls `planName`, `speed`,
+     * `contractDurationMonths`, `contractEndDate`, `installationFee` and
+     * `billingPeriodLabel` when the caller does not supply them. Bulk import carries none
+     * of those, so using [update] to refresh a rate would silently wipe data entered
+     * through the account-edit and ISP-creation flows.
+     */
+    fun updateRate(id: String, rate: Money): Account?
 
     /** Active accounts on a given store (used when closing a store -> floating). */
     fun listActiveByStore(storeId: String): List<Account>
