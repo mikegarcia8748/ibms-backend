@@ -7,6 +7,7 @@ import com.puregoldbe.ibms.infrastructure.config.AppEnv
 import com.puregoldbe.ibms.infrastructure.config.AuthConfig
 import com.puregoldbe.ibms.infrastructure.config.EmailDelivery
 import com.puregoldbe.ibms.infrastructure.config.JwtConfig
+import com.puregoldbe.ibms.infrastructure.config.TopSheetFeatures
 import com.puregoldbe.ibms.infrastructure.moduleWith
 import io.ktor.server.application.Application
 
@@ -58,3 +59,15 @@ fun Application.testModule(cfg: AppConfig) {
     configureSerialization()
     moduleWith(cfg)
 }
+
+/**
+ * The post-compile chain switched back on — generate-rfp, release-to-finance, pay, and
+ * the two cheque exports.
+ *
+ * The default [testAppConfig] leaves it off, matching what a deployment gets, so the
+ * bulk of the suite exercises the shipped lifecycle. The specs that still cover the
+ * external chain opt in here rather than having the whole suite pretend it is live.
+ */
+fun Application.rfpFlowTestModule() = testModule(
+    testAppConfig { copy(topsheet = TopSheetFeatures(rfpFlowEnabled = true)) },
+)

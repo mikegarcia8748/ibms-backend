@@ -134,6 +134,11 @@ data class AppConfig(
      * JWT secret doesn't invalidate in-flight uploads as an undocumented side effect.
      */
     val presignSecret: String,
+    /**
+     * Optional lifecycle stages. Defaulted so a hand-built config (tests, a future
+     * non-env source) gets the shipped behaviour without naming it. See [TopSheetFeatures].
+     */
+    val topsheet: TopSheetFeatures = TopSheetFeatures(),
 ) {
     /** [corsAllowedHosts] in the shape the CORS plugin takes. See [CorsOrigin]. */
     fun corsOrigins(): List<CorsOrigin> = corsAllowedHosts.map(CorsOrigin::parse)
@@ -363,6 +368,9 @@ data class AppConfig(
                     webClientUrl = webClientUrl ?: ConfigReader.PLACEHOLDER,
                     presignSecret = raw("PRESIGN_SECRET")
                         ?: derivePresignSecret(jwtSecret ?: ConfigReader.PLACEHOLDER),
+                    topsheet = TopSheetFeatures(
+                        rfpFlowEnabled = boolean("TOPSHEET_RFP_FLOW_ENABLED", default = false),
+                    ),
                 )
             }
         }

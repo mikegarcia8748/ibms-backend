@@ -55,14 +55,21 @@ fun Application.moduleWith(cfg: AppConfig) {
     // this re-check catches a hand-built config that never went through it.
     cfg.requireCoherent()
     log.info(
-        "[config] APP_ENV={} db={} email={} cors={} appUrl={} webClientUrl={}",
+        "[config] APP_ENV={} db={} email={} cors={} appUrl={} webClientUrl={} webClientUrl={}",
         cfg.appEnv.name.lowercase(),
         cfg.db.url,
         cfg.emailDelivery.name.lowercase(),
         if (cfg.corsAllowedHosts.isEmpty()) "any-host" else cfg.corsAllowedHosts.joinToString(","),
         cfg.appUrl,
         cfg.webClientUrl,
+        if (cfg.topsheet.rfpFlowEnabled) "enabled" else "disabled (lifecycle ends at compiled)",
     )
+    if (cfg.topsheet.rfpFlowEnabled) {
+        log.warn(
+            "[topsheet] TOPSHEET_RFP_FLOW_ENABLED=true, but the only RfpGateway is SimulatedRfpGateway — " +
+                "generate-rfp will mint fabricated RFP numbers and release-to-finance always succeeds.",
+        )
+    }
     cfg.webClientCorsWarning()?.let { log.warn(it) }
 
     // --- Database (Hikari + Flyway + Exposed) ---
@@ -262,8 +269,9 @@ fun Application.moduleWith(cfg: AppConfig) {
                 previewCompilation, createDraftTopSheet, updateDraftLine,
                 generateRfp, releaseToFinance, removeDraftLine, confirmTopSheet, cancelTopSheet,
                 listTopSheets, getTopSheet, getTopSheetDetails, payTopSheet,
+                features = cfg.topsheet,
             )
-            exportRoutes(exportTopSheet, exportAccounts, exportChequePdf, exportChequeCsv)
+            exportRoutes(exportTopSheet, exportAccounts, exportChequePdf, exportChequeCsv, features = cfg.topsheet)
             dashboardRoutes(dashboardSummary, listDashboardAccounts, listBillingHistory, listStores, exportAccounts)
             attachmentRoutes(presignUpload, presignDownload)
             jobRoutes(expireGrace)

@@ -39,9 +39,14 @@ enum class NotificationEvent(val key: String, val label: String, val description
         "topsheet.compiled", "Topsheet compiled",
         "A draft top sheet was confirmed into a compiled billing batch.",
     ),
+    // The key stays even where the flow that fires it is switched off: existing
+    // user_notification_subscriptions rows store it verbatim, and parseNotificationEvent
+    // turns an unrecognised key into a 400 — dropping the constant would make the
+    // subscription admin screens fail on data they themselves wrote.
     TOPSHEET_RELEASED(
         "topsheet.released", "Topsheet released to finance",
-        "A compiled top sheet was released to Finance for payment.",
+        "A compiled top sheet was released to Finance for payment. Only fires where the " +
+            "external RFP/finance flow is enabled (TOPSHEET_RFP_FLOW_ENABLED).",
     ),
     ACCOUNT_UPDATED(
         "account.updated", "Account details updated",

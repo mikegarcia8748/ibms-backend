@@ -23,6 +23,27 @@ import io.ktor.server.response.*
 internal fun ApplicationCall.pathId(): String =
     parameters["id"] ?: throw DomainError.Validation("missing path id")
 
+/**
+ * Rejects a request for a route whose feature is switched off on this deployment.
+ *
+ * Called as the *first* statement of a handler, before `authorize` and before any
+ * repository read: the feature being off is not role-dependent, so a caller with the
+ * wrong role should learn that the endpoint is disabled rather than that they lack a
+ * role they would not have needed. Unauthenticated callers still get 401 — the
+ * authentication plugin runs outside the handler.
+ *
+ * The route stays registered so the answer is a stated 503 rather than a 404 that
+ * reads like a routing fault, and so re-enabling is one environment variable away.
+ */
+internal fun requireEnabled(enabled: Boolean, what: String) {
+    if (!enabled) {
+        throw DomainError.Disabled(
+            "$what is temporarily disabled on this deployment — the topsheet lifecycle " +
+                "currently ends at compiled (preview -> draft -> confirm -> export)",
+        )
+    }
+}
+
 /** Cursor + clamped page size parsed from `?cursor=&limit=` for paginated list endpoints. */
 internal data class PageParams(val cursor: String?, val limit: Int)
 

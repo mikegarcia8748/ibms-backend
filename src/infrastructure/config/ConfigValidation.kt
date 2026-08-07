@@ -40,6 +40,21 @@ enum class EmailDelivery {
 }
 
 /**
+ * Which optional parts of the topsheet lifecycle this deployment runs.
+ *
+ * [rfpFlowEnabled] gates the whole post-compile chain as one unit — generate-rfp,
+ * release-to-finance, pay, and the two cheque voucher exports. They form a single
+ * chain (pay needs APPROVED, which only release-to-finance produces), so switching
+ * one on without the others only produces unreachable states.
+ *
+ * Off by default: the external RFP system has no HTTP adapter yet, so the lifecycle
+ * ends at COMPILED and the deliverable is the xlsx export. Nothing is deleted — the
+ * use cases and the RFP gateway stay wired and the routes stay registered, so this is
+ * a one-variable reversal with no migration in either direction.
+ */
+data class TopSheetFeatures(val rfpFlowEnabled: Boolean = false)
+
+/**
  * Every configuration problem found during one [AppConfig.fromEnv] pass, reported
  * together. Fixing config one boot at a time is miserable when six variables are
  * missing, so [ConfigReader] accumulates rather than throwing on the first failure.

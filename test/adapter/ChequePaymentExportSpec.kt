@@ -1,6 +1,7 @@
 package com.puregoldbe.ibms.adapter
 
 import com.puregoldbe.ibms.domain.model.UserRole
+import com.puregoldbe.ibms.support.rfpFlowTestModule
 import com.puregoldbe.ibms.support.signIn
 import com.puregoldbe.ibms.support.testModule
 import com.puregoldbe.ibms.support.uploadPdfProof
@@ -21,6 +22,11 @@ import kotlinx.serialization.json.*
  * drive a topsheet to APPROVED, pay it with a cheque number (APPROVED → PAID), then
  * download the Cheque Payment Voucher PDF and CSV. Also pins the guards: the exports
  * 409 before the cheque is recorded, a blank cheque is rejected, and auth is required.
+ *
+ * Payment and the cheque exports sit behind TOPSHEET_RFP_FLOW_ENABLED, which a
+ * deployment gets as off. The happy path therefore opts in via [rfpFlowTestModule];
+ * the last two Given blocks stay on the default config and pin what a caller sees
+ * while the feature is switched off.
  */
 class ChequePaymentExportSpec : BehaviorSpec({
 
@@ -31,11 +37,11 @@ class ChequePaymentExportSpec : BehaviorSpec({
     val now = Clock.System.now().toLocalDateTime(TimeZone.of("Asia/Manila"))
     val currentPeriod = "${now.year}-${now.monthNumber.toString().padStart(2, '0')}"
 
-    Given("an APPROVED topsheet") {
+    Given("an APPROVED topsheet, with the RFP/finance flow enabled") {
         When("recording a cheque number and downloading the payment documents") {
             Then("pay stores the cheque and the PDF/CSV exports are produced") {
                 testApplication {
-                    application { testModule() }
+                    application { rfpFlowTestModule() }
 
                     val token = signIn(UserRole.SYSADMIN).token
                     val s = System.nanoTime().toString()
@@ -140,9 +146,34 @@ class ChequePaymentExportSpec : BehaviorSpec({
         }
     }
 
+    Given("the cheque flow disabled — what a deployment gets by default") {
+        When("an authenticated caller GETs the cheque PDF/CSV") {
+            Then("both answer 503, not the 409 'pay it first' that could never be satisfied") {
+                testApplication {
+                    application { testModule() }
+                    val token = signIn(UserRole.SYSADMIN).token
+                    // An id that does not exist: the feature guard runs before any lookup,
+                    // so this never reaches the database and never 404s.
+                    val id = "00000000-0000-0000-0000-000000000000"
+
+                    listOf("cheque.pdf", "cheque.csv").forEach { doc ->
+                        val res = client.get("/exports/topsheet/$id/$doc") {
+                            header(HttpHeaders.Authorization, "Bearer $token")
+                        }
+                        res.status shouldBe HttpStatusCode.ServiceUnavailable
+                        res.bodyAsText() shouldContain "temporarily disabled"
+                    }
+                }
+            }
+        }
+    }
+
+    // Runs on the default (disabled) config on purpose: the routes stay registered while
+    // the feature is off, so authentication still fires ahead of the feature guard. Were
+    // they unregistered instead these would be 404s.
     Given("no authentication") {
         When("GET the cheque PDF/CSV export endpoints") {
-            Then("both return 401") {
+            Then("both return 401 — auth still wins over the feature guard") {
                 testApplication {
                     application { testModule() }
                     val id = "00000000-0000-0000-0000-000000000000"

@@ -1,11 +1,13 @@
 package com.puregoldbe.ibms.adapter
 
 import com.puregoldbe.ibms.domain.model.UserRole
+import com.puregoldbe.ibms.support.rfpFlowTestModule
 import com.puregoldbe.ibms.support.signIn
 import com.puregoldbe.ibms.support.testModule
 import com.puregoldbe.ibms.support.uploadPdfProof
 import io.kotest.core.spec.style.BehaviorSpec
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
@@ -16,15 +18,19 @@ import kotlinx.datetime.toLocalDateTime
 import kotlinx.serialization.json.*
 
 /**
- * End-to-end integration spec for the TopSheet lifecycle (DRAFT → edit amounts →
- * CONFIRM → generate-rfp → release-to-finance), against the real composition root and
- * Testcontainers Postgres.
+ * End-to-end integration spec for the TopSheet lifecycle, against the real composition
+ * root and Testcontainers Postgres.
  *
- * Proves the full HTTP lifecycle: preview, draft creation, prorated-amount editing,
- * line removal, confirmation that mints the invoice number, external RFP generation
- * (per line, via the simulated gateway), and the secretary's release-to-finance handoff.
+ * Two lifecycles live here, and which one a Given exercises is decided by the module it
+ * boots. The **shipped** flow — preview → draft → edit amounts → remove lines → confirm
+ * (minting the invoice + batch numbers) → xlsx export — runs on `testModule()`, where
+ * TOPSHEET_RFP_FLOW_ENABLED is off exactly as a deployment gets it, and COMPILED is the
+ * terminal status. The **external** chain — generate-rfp → release-to-finance — runs on
+ * `rfpFlowTestModule()`; its code is untouched by the feature flag and still fully covered.
+ *
  * Also pins the invariants: future periods are rejected, RFP is assigned only after
- * confirm, the state-machine guards hold, and DRAFT lines do not count as "already billed".
+ * confirm, the state-machine guards hold, cancelling requires a stated reason, and DRAFT
+ * lines do not count as "already billed".
  */
 class TopSheetDraftFlowSpec : BehaviorSpec({
 
@@ -44,9 +50,49 @@ class TopSheetDraftFlowSpec : BehaviorSpec({
         "${now.year}-${(now.monthNumber + 1).toString().padStart(2, '0')}"
     }
 
+    /**
+     * The prologue every Given needs: a provider, a store, and [accounts] accounts on it.
+     * Returns the provider id. [tag] keeps branch codes and account numbers unique — the
+     * suite shares one Postgres that is never truncated between specs.
+     */
+    suspend fun ApplicationTestBuilder.seedProvider(token: String, tag: String, accounts: Int = 1): String {
+        val s = System.nanoTime().toString()
+        val providerId = client.post("/providers") {
+            header(HttpHeaders.Authorization, "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody("""{"name":"${tag}Prov-$s","paymentScheduleDay":5}""")
+        }.bodyAsText().asJson().data().str("id")
+
+        val attachmentId = client.post("/attachments/presign/upload") {
+            header(HttpHeaders.Authorization, "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody("""{"fileName":"p.txt","contentType":"text/plain","purpose":"installation_proof"}""")
+        }.bodyAsText().asJson().data().str("attachmentId")
+
+        val storeId = client.post("/stores") {
+            header(HttpHeaders.Authorization, "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody(
+                """{"storeType":"puregold","branchCode":"$tag-$s","name":"$tag Store","proofOfInstallationId":"$attachmentId"}""",
+            )
+        }.bodyAsText().asJson().data().str("id")
+
+        repeat(accounts) { i ->
+            val proofId = uploadPdfProof(token, "subscription_proof")
+            client.post("/accounts") {
+                header(HttpHeaders.Authorization, "Bearer $token")
+                contentType(ContentType.Application.Json)
+                setBody(
+                    """{"accountNumber":"$tag-$s-$i","providerId":"$providerId","storeId":"$storeId","rate":"1000","installationDate":"2020-01-01","subscriptionProofIds":["$proofId"]}""",
+                )
+            }.status shouldBe HttpStatusCode.Created
+        }
+        return providerId
+    }
+
     Given("seeded provider, stores, and accounts") {
-        When("walking the full lifecycle") {
-            Then("preview → draft → edit → confirm → generate-rfp → release-to-finance all work") {
+        When("walking the shipped lifecycle, with the external RFP chain switched off") {
+            Then("preview → draft → edit → confirm → xlsx export work, and the RFP chain is 503") {
                 testApplication {
                     application { testModule() }
 
@@ -176,30 +222,30 @@ class TopSheetDraftFlowSpec : BehaviorSpec({
                     batchNumber.startsWith("CONV-") shouldBe true
                     batchNumber.endsWith("-B001") shouldBe true
 
-                    // 8. Generate RFP via the external (simulated) system → 200, every line
-                    //    now carries an rfpNumber + rfpUniqueKey; topsheet moves to rfp_assigned.
-                    val generate = client.post("/topsheets/$draftId/generate-rfp") {
-                        header(HttpHeaders.Authorization, "Bearer $token")
+                    // 8. The external chain is switched off, so COMPILED is where the
+                    //    lifecycle ends. Both endpoints answer 503 and the status is unmoved.
+                    listOf("generate-rfp", "release-to-finance").forEach { step ->
+                        val res = client.post("/topsheets/$draftId/$step") {
+                            header(HttpHeaders.Authorization, "Bearer $token")
+                        }
+                        res.status shouldBe HttpStatusCode.ServiceUnavailable
+                        res.bodyAsText() shouldContain "temporarily disabled"
                     }
-                    generate.status shouldBe HttpStatusCode.OK
-                    val rfpLines = generate.bodyAsText().asJson().dataArr().map { it.jsonObject }
-                    rfpLines.size shouldBe 2
-                    rfpLines.forEach { line ->
-                        (line["rfpNumber"] is JsonNull) shouldBe false
-                        (line["rfpUniqueKey"] is JsonNull) shouldBe false
-                    }
-                    rfpLines[0].str("rfpNumber") shouldBe "0100001"
-
                     client.get("/topsheets/$draftId") {
                         header(HttpHeaders.Authorization, "Bearer $token")
-                    }.bodyAsText().asJson().data().str("status") shouldBe "rfp_assigned"
+                    }.bodyAsText().asJson().data().str("status") shouldBe "compiled"
 
-                    // 9. Release to finance → 200, status approved
-                    val release = client.post("/topsheets/$draftId/release-to-finance") {
+                    // 9. The workbook is the terminal deliverable — a real xlsx, named for
+                    //    the invoice number minted at confirm.
+                    val invoiceNumber = confirmData.str("invoiceNumber")
+                    val xlsx = client.get("/exports/topsheet/$draftId.xlsx") {
                         header(HttpHeaders.Authorization, "Bearer $token")
                     }
-                    release.status shouldBe HttpStatusCode.OK
-                    release.bodyAsText().asJson().data().str("status") shouldBe "approved"
+                    xlsx.status shouldBe HttpStatusCode.OK
+                    xlsx.headers[HttpHeaders.ContentDisposition]!! shouldContain invoiceNumber
+                    xlsx.headers[HttpHeaders.ContentDisposition]!! shouldContain ".xlsx"
+                    // "PK" — the ZIP local-file-header magic every OOXML workbook starts with.
+                    xlsx.readRawBytes().take(2).toByteArray().decodeToString() shouldBe "PK"
 
                     // 10. DRAFT lines do NOT count as "already billed" — a draft for a
                     //     different provider in the same period succeeds.
@@ -256,43 +302,113 @@ class TopSheetDraftFlowSpec : BehaviorSpec({
         }
     }
 
-    Given("a draft that is confirmed before any RFP is assigned") {
-        When("walking the RFP/release state-machine guards") {
-            Then("confirm succeeds without RFP; generate-rfp and release enforce their statuses") {
+    Given("seeded accounts and the external RFP/finance chain enabled") {
+        When("walking the lifecycle past compiled") {
+            Then("generate-rfp numbers every line and release-to-finance approves the batch") {
+                testApplication {
+                    application { rfpFlowTestModule() }
+
+                    val token = signIn(UserRole.SYSADMIN).token
+                    val providerId = seedProvider(token, "RFP", accounts = 2)
+
+                    val draftId = client.post("/topsheets/draft") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                        contentType(ContentType.Application.Json)
+                        setBody("""{"providerId":"$providerId","billingPeriod":"$currentPeriod"}""")
+                    }.bodyAsText().asJson().data().str("id")
+
+                    client.post("/topsheets/$draftId/confirm") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                    }.status shouldBe HttpStatusCode.OK
+
+                    // Generate RFP via the external (simulated) system → 200, every line now
+                    // carries an rfpNumber + rfpUniqueKey; topsheet moves to rfp_assigned.
+                    val generate = client.post("/topsheets/$draftId/generate-rfp") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                    }
+                    generate.status shouldBe HttpStatusCode.OK
+                    val rfpLines = generate.bodyAsText().asJson().dataArr().map { it.jsonObject }
+                    rfpLines.size shouldBe 2
+                    rfpLines.forEach { line ->
+                        (line["rfpNumber"] is JsonNull) shouldBe false
+                        (line["rfpUniqueKey"] is JsonNull) shouldBe false
+                    }
+                    rfpLines[0].str("rfpNumber") shouldBe "0100001"
+
+                    client.get("/topsheets/$draftId") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                    }.bodyAsText().asJson().data().str("status") shouldBe "rfp_assigned"
+
+                    val release = client.post("/topsheets/$draftId/release-to-finance") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                    }
+                    release.status shouldBe HttpStatusCode.OK
+                    release.bodyAsText().asJson().data().str("status") shouldBe "approved"
+                }
+            }
+        }
+    }
+
+    Given("a confirmed topsheet with the RFP chain disabled — the default") {
+        When("calling the post-compile endpoints from every angle") {
+            Then("all answer 503 ahead of the status and role checks, and confirm still works") {
                 testApplication {
                     application { testModule() }
 
                     val token = signIn(UserRole.SYSADMIN).token
-                    val s = System.nanoTime().toString()
+                    val secretaryToken = signIn(UserRole.SECRETARY).token
+                    val providerId = seedProvider(token, "OFF")
 
-                    val providerId = client.post("/providers") {
+                    val draftId = client.post("/topsheets/draft") {
                         header(HttpHeaders.Authorization, "Bearer $token")
                         contentType(ContentType.Application.Json)
-                        setBody("""{"name":"GuardProv-$s","paymentScheduleDay":5}""")
+                        setBody("""{"providerId":"$providerId","billingPeriod":"$currentPeriod"}""")
                     }.bodyAsText().asJson().data().str("id")
 
-                    val attachmentId = client.post("/attachments/presign/upload") {
+                    // Still a DRAFT: with the chain live this is a 409 wrong-status. The 503
+                    // proves the feature guard runs before the status check.
+                    client.post("/topsheets/$draftId/generate-rfp") {
                         header(HttpHeaders.Authorization, "Bearer $token")
-                        contentType(ContentType.Application.Json)
-                        setBody("""{"fileName":"p.txt","contentType":"text/plain","purpose":"installation_proof"}""")
-                    }.bodyAsText().asJson().data().str("attachmentId")
+                    }.status shouldBe HttpStatusCode.ServiceUnavailable
 
-                    val storeId = client.post("/stores") {
+                    // Confirm is untouched by the flag → COMPILED.
+                    val confirm = client.post("/topsheets/$draftId/confirm") {
                         header(HttpHeaders.Authorization, "Bearer $token")
-                        contentType(ContentType.Application.Json)
-                        setBody(
-                            """{"storeType":"puregold","branchCode":"GD-$s","name":"Guard Store","proofOfInstallationId":"$attachmentId"}""",
-                        )
-                    }.bodyAsText().asJson().data().str("id")
+                    }
+                    confirm.status shouldBe HttpStatusCode.OK
+                    confirm.bodyAsText().asJson().data().str("status") shouldBe "compiled"
 
-                    val proofId3 = uploadPdfProof(token, "subscription_proof")
-                    client.post("/accounts") {
-                        header(HttpHeaders.Authorization, "Bearer $token")
+                    listOf("generate-rfp", "release-to-finance").forEach { step ->
+                        client.post("/topsheets/$draftId/$step") {
+                            header(HttpHeaders.Authorization, "Bearer $token")
+                        }.status shouldBe HttpStatusCode.ServiceUnavailable
+                    }
+
+                    // /pay is finance-only. A secretary would normally be refused 403; the 503
+                    // proves the feature guard runs before authorize() too, so the caller
+                    // learns the endpoint is off rather than chasing a role they never needed.
+                    client.post("/topsheets/$draftId/pay") {
+                        header(HttpHeaders.Authorization, "Bearer $secretaryToken")
                         contentType(ContentType.Application.Json)
-                        setBody(
-                            """{"accountNumber":"gd-$s-1","providerId":"$providerId","storeId":"$storeId","rate":"1000","installationDate":"2020-01-01","subscriptionProofIds":["$proofId3"]}""",
-                        )
-                    }.status shouldBe HttpStatusCode.Created
+                        setBody("""{"chequeNumber":"CHQ-9999"}""")
+                    }.status shouldBe HttpStatusCode.ServiceUnavailable
+
+                    // Unauthenticated still loses at the door: the routes stay registered, so
+                    // authentication fires ahead of the feature guard.
+                    client.post("/topsheets/$draftId/generate-rfp").status shouldBe HttpStatusCode.Unauthorized
+                }
+            }
+        }
+    }
+
+    Given("a draft that is confirmed before any RFP is assigned, with the chain enabled") {
+        When("walking the RFP/release state-machine guards") {
+            Then("confirm succeeds without RFP; generate-rfp and release enforce their statuses") {
+                testApplication {
+                    application { rfpFlowTestModule() }
+
+                    val token = signIn(UserRole.SYSADMIN).token
+                    val providerId = seedProvider(token, "GD")
 
                     val draftId = client.post("/topsheets/draft") {
                         header(HttpHeaders.Authorization, "Bearer $token")
@@ -495,9 +611,21 @@ class TopSheetDraftFlowSpec : BehaviorSpec({
                         setBody(body)
                     }.bodyAsText().asJson().data().str("id")
 
-                    // Cancel the DRAFT → 200, status 'cancelled'.
+                    // A reason is mandatory — cancelling deletes the lines. No body → 400.
+                    client.post("/topsheets/$draftId/cancel") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                    }.status shouldBe HttpStatusCode.BadRequest
+                    client.post("/topsheets/$draftId/cancel") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                        contentType(ContentType.Application.Json)
+                        setBody("""{"reason":"   "}""")
+                    }.status shouldBe HttpStatusCode.BadRequest
+
+                    // Cancel the DRAFT with a reason → 200, status 'cancelled'.
                     val cancel = client.post("/topsheets/$draftId/cancel") {
                         header(HttpHeaders.Authorization, "Bearer $token")
+                        contentType(ContentType.Application.Json)
+                        setBody("""{"reason":"drafted against the wrong period"}""")
                     }
                     cancel.status shouldBe HttpStatusCode.OK
                     cancel.bodyAsText().asJson().data().str("status") shouldBe "cancelled"
@@ -520,47 +648,19 @@ class TopSheetDraftFlowSpec : BehaviorSpec({
         }
     }
 
-    Given("a COMPILED topsheet, and separately one already at rfp_assigned") {
-        When("cancelling each") {
-            Then("the COMPILED one voids and re-bills; the rfp_assigned one is rejected 409") {
+    // With the RFP chain off, COMPILED is terminal — and still cancellable, indefinitely.
+    // That is the deliberate escape hatch for a bad batch; the mandatory reason is what
+    // keeps the erasure of an already-invoiced billing record attributable.
+    Given("a COMPILED topsheet — the terminal status of the shipped flow") {
+        When("cancelling it, then re-drafting the same provider/period") {
+            Then("it voids with its reason recorded, and the accounts become re-billable") {
                 testApplication {
                     application { testModule() }
 
                     val token = signIn(UserRole.SYSADMIN).token
-                    val s = System.nanoTime().toString()
-
-                    val providerId = client.post("/providers") {
-                        header(HttpHeaders.Authorization, "Bearer $token")
-                        contentType(ContentType.Application.Json)
-                        setBody("""{"name":"CmpCancProv-$s","paymentScheduleDay":5}""")
-                    }.bodyAsText().asJson().data().str("id")
-
-                    val attachmentId = client.post("/attachments/presign/upload") {
-                        header(HttpHeaders.Authorization, "Bearer $token")
-                        contentType(ContentType.Application.Json)
-                        setBody("""{"fileName":"p.txt","contentType":"text/plain","purpose":"installation_proof"}""")
-                    }.bodyAsText().asJson().data().str("attachmentId")
-
-                    val storeId = client.post("/stores") {
-                        header(HttpHeaders.Authorization, "Bearer $token")
-                        contentType(ContentType.Application.Json)
-                        setBody(
-                            """{"storeType":"puregold","branchCode":"CB-$s","name":"Canc Store B","proofOfInstallationId":"$attachmentId"}""",
-                        )
-                    }.bodyAsText().asJson().data().str("id")
-
-                    val proof = uploadPdfProof(token, "subscription_proof")
-                    client.post("/accounts") {
-                        header(HttpHeaders.Authorization, "Bearer $token")
-                        contentType(ContentType.Application.Json)
-                        setBody(
-                            """{"accountNumber":"cb-$s-1","providerId":"$providerId","storeId":"$storeId","rate":"1000","installationDate":"2020-01-01","subscriptionProofIds":["$proof"]}""",
-                        )
-                    }.status shouldBe HttpStatusCode.Created
-
+                    val providerId = seedProvider(token, "CB")
                     val body = """{"providerId":"$providerId","billingPeriod":"$currentPeriod"}"""
 
-                    // Draft → confirm → COMPILED, then cancel the COMPILED topsheet → 200 cancelled.
                     val draftId = client.post("/topsheets/draft") {
                         header(HttpHeaders.Authorization, "Bearer $token")
                         contentType(ContentType.Application.Json)
@@ -569,31 +669,63 @@ class TopSheetDraftFlowSpec : BehaviorSpec({
                     client.post("/topsheets/$draftId/confirm") {
                         header(HttpHeaders.Authorization, "Bearer $token")
                     }.status shouldBe HttpStatusCode.OK
+
                     val cancelCompiled = client.post("/topsheets/$draftId/cancel") {
                         header(HttpHeaders.Authorization, "Bearer $token")
+                        contentType(ContentType.Application.Json)
+                        setBody("""{"reason":"amounts wrong, re-billing"}""")
                     }
                     cancelCompiled.status shouldBe HttpStatusCode.OK
                     cancelCompiled.bodyAsText().asJson().data().str("status") shouldBe "cancelled"
 
+                    // The reason reaches the audit trail, which is the whole point of it.
+                    client.get("/activities?entityId=$draftId") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                    }.bodyAsText() shouldContain "amounts wrong, re-billing"
+
+                    // A cancelled topsheet has no lines left, so its workbook would be a
+                    // header over an empty table — the export refuses it.
+                    client.get("/exports/topsheet/$draftId.xlsx") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                    }.status shouldBe HttpStatusCode.Conflict
+
                     // The account is re-billable: a fresh draft compiles it again.
-                    val redraftId = client.post("/topsheets/draft") {
+                    client.post("/topsheets/draft") {
                         header(HttpHeaders.Authorization, "Bearer $token")
                         contentType(ContentType.Application.Json)
                         setBody(body)
-                    }.let {
-                        it.status shouldBe HttpStatusCode.Created
-                        it.bodyAsText().asJson().data().str("id")
-                    }
+                    }.status shouldBe HttpStatusCode.Created
+                }
+            }
+        }
+    }
 
-                    // Push it to rfp_assigned; cancelling then is blocked with 409.
-                    client.post("/topsheets/$redraftId/confirm") {
+    Given("a topsheet already at rfp_assigned, with the external chain enabled") {
+        When("cancelling it") {
+            Then("it is rejected 409 — the external RFP transaction already exists") {
+                testApplication {
+                    application { rfpFlowTestModule() }
+
+                    val token = signIn(UserRole.SYSADMIN).token
+                    val providerId = seedProvider(token, "CC")
+
+                    val draftId = client.post("/topsheets/draft") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                        contentType(ContentType.Application.Json)
+                        setBody("""{"providerId":"$providerId","billingPeriod":"$currentPeriod"}""")
+                    }.bodyAsText().asJson().data().str("id")
+
+                    client.post("/topsheets/$draftId/confirm") {
                         header(HttpHeaders.Authorization, "Bearer $token")
                     }.status shouldBe HttpStatusCode.OK
-                    client.post("/topsheets/$redraftId/generate-rfp") {
+                    client.post("/topsheets/$draftId/generate-rfp") {
                         header(HttpHeaders.Authorization, "Bearer $token")
                     }.status shouldBe HttpStatusCode.OK
-                    client.post("/topsheets/$redraftId/cancel") {
+
+                    client.post("/topsheets/$draftId/cancel") {
                         header(HttpHeaders.Authorization, "Bearer $token")
+                        contentType(ContentType.Application.Json)
+                        setBody("""{"reason":"too late, but try anyway"}""")
                     }.status shouldBe HttpStatusCode.Conflict
                 }
             }

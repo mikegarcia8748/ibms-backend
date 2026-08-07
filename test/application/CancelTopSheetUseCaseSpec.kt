@@ -41,12 +41,12 @@ class CancelTopSheetUseCaseSpec : BehaviorSpec({
         every { topsheets.cancel("ts1") } returns topsheet(TopSheetStatus.CANCELLED)
 
         When("cancelling it") {
-            val result = useCase("ts1", "sec1")
+            val result = useCase("ts1", "sec1", "duplicate batch")
 
-            Then("it is voided and the action is recorded") {
+            Then("it is voided and the reason is recorded on the audit trail") {
                 result.status shouldBe TopSheetStatus.CANCELLED
                 verify(exactly = 1) { topsheets.cancel("ts1") }
-                verify { activity.record("sec1", "topsheet.cancelled", "topsheet", "ts1") }
+                verify { activity.record("sec1", "topsheet.cancelled", "topsheet", "ts1", "duplicate batch") }
             }
         }
     }
@@ -56,7 +56,7 @@ class CancelTopSheetUseCaseSpec : BehaviorSpec({
         every { topsheets.cancel("ts1") } returns topsheet(TopSheetStatus.CANCELLED)
 
         When("cancelling it") {
-            val result = useCase("ts1", "sec1")
+            val result = useCase("ts1", "sec1", "duplicate batch")
 
             Then("it is voided too — still before RFP assignment") {
                 result.status shouldBe TopSheetStatus.CANCELLED
@@ -71,7 +71,7 @@ class CancelTopSheetUseCaseSpec : BehaviorSpec({
 
             When("cancelling it") {
                 Then("it is rejected with a Conflict and nothing is voided") {
-                    shouldThrow<DomainError.Conflict> { useCase("ts1", "sec1") }
+                    shouldThrow<DomainError.Conflict> { useCase("ts1", "sec1", "duplicate batch") }
                     verify(exactly = 0) { topsheets.cancel(any()) }
                 }
             }
@@ -83,8 +83,50 @@ class CancelTopSheetUseCaseSpec : BehaviorSpec({
 
         When("cancelling it") {
             Then("it fails as NotFound and nothing is voided") {
-                shouldThrow<DomainError.NotFound> { useCase("nope", "sec1") }
+                shouldThrow<DomainError.NotFound> { useCase("nope", "sec1", "duplicate batch") }
                 verify(exactly = 0) { topsheets.cancel(any()) }
+            }
+        }
+    }
+
+    // Cancelling deletes the line items, which erases a billing-history record carrying a
+    // minted invoice number and frees the accounts to be billed again. With the RFP chain
+    // off, COMPILED is terminal, so nothing else ever closes that window — the stated
+    // reason is what makes the erasure attributable.
+    Given("a cancel request with no reason") {
+        every { topsheets.findById("ts1") } returns topsheet(TopSheetStatus.COMPILED)
+
+        listOf("" to "empty", "   " to "whitespace-only").forEach { (reason, kind) ->
+            When("the reason is $kind") {
+                Then("it is rejected as a Validation before the repository is touched") {
+                    shouldThrow<DomainError.Validation> { useCase("ts1", "sec1", reason) }
+                    verify(exactly = 0) { topsheets.findById(any()) }
+                    verify(exactly = 0) { topsheets.cancel(any()) }
+                }
+            }
+        }
+    }
+
+    Given("a cancel reason longer than the 500-character limit") {
+        every { topsheets.findById("ts1") } returns topsheet(TopSheetStatus.COMPILED)
+
+        When("cancelling with it") {
+            Then("it is rejected as a Validation and nothing is voided") {
+                shouldThrow<DomainError.Validation> { useCase("ts1", "sec1", "x".repeat(501)) }
+                verify(exactly = 0) { topsheets.cancel(any()) }
+            }
+        }
+    }
+
+    Given("a cancel reason padded with whitespace") {
+        every { topsheets.findById("ts1") } returns topsheet(TopSheetStatus.COMPILED)
+        every { topsheets.cancel("ts1") } returns topsheet(TopSheetStatus.CANCELLED)
+
+        When("cancelling with it") {
+            useCase("ts1", "sec1", "  wrong billing period  ")
+
+            Then("the trimmed reason is what reaches the audit trail") {
+                verify { activity.record("sec1", "topsheet.cancelled", "topsheet", "ts1", "wrong billing period") }
             }
         }
     }
@@ -95,7 +137,7 @@ class CancelTopSheetUseCaseSpec : BehaviorSpec({
 
         When("cancelling it") {
             Then("it surfaces a Conflict rather than a silent success") {
-                shouldThrow<DomainError.Conflict> { useCase("ts1", "sec1") }
+                shouldThrow<DomainError.Conflict> { useCase("ts1", "sec1", "duplicate batch") }
             }
         }
     }

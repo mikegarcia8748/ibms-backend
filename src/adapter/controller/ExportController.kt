@@ -6,6 +6,7 @@ import com.puregoldbe.ibms.application.usecase.ExportChequePaymentCsvUseCase
 import com.puregoldbe.ibms.application.usecase.ExportTopSheetExcelUseCase
 import com.puregoldbe.ibms.application.usecase.GenerateChequePaymentPdfUseCase
 import com.puregoldbe.ibms.domain.model.UserRole
+import com.puregoldbe.ibms.infrastructure.config.TopSheetFeatures
 import io.ktor.http.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
@@ -15,12 +16,16 @@ import io.ktor.server.routing.*
  * deliberately bypass the JSON response envelope (respondBytes) — they stream
  * binary attachments. The `{id}.xlsx` segment captures the topsheet id up to
  * the literal suffix.
+ *
+ * [features] gates the two cheque vouchers along with the payment flow that produces
+ * the cheque number they read. The topsheet and account workbooks are never gated.
  */
 fun Route.exportRoutes(
     exportTopSheet: ExportTopSheetExcelUseCase,
     exportAccounts: ExportAccountsExcelUseCase,
     exportChequePdf: GenerateChequePaymentPdfUseCase,
     exportChequeCsv: ExportChequePaymentCsvUseCase,
+    features: TopSheetFeatures,
 ) {
     get("/exports/topsheet/{id}.xlsx") {
         call.authorize(UserRole.SECRETARY, UserRole.FINANCE)
@@ -53,7 +58,12 @@ fun Route.exportRoutes(
 
     // Cheque Payment Voucher for a paid topsheet. `{id}` is its own path segment
     // before the literal `/cheque.pdf|.csv` suffix, so call.pathId() reads it directly.
+    //
+    // Gated with the payment flow rather than left to fall through: cheque_number is
+    // written only by topsheets.pay, so with payment off these would answer
+    // "no cheque number yet; pay it first" — an instruction the client cannot follow.
     get("/exports/topsheet/{id}/cheque.pdf") {
+        requireEnabled(features.rfpFlowEnabled, "the cheque payment voucher (PDF)")
         call.authorize(UserRole.SECRETARY, UserRole.FINANCE)
         val file = exportChequePdf(call.pathId())
         call.response.header(
@@ -64,6 +74,7 @@ fun Route.exportRoutes(
     }
 
     get("/exports/topsheet/{id}/cheque.csv") {
+        requireEnabled(features.rfpFlowEnabled, "the cheque payment voucher (CSV)")
         call.authorize(UserRole.SECRETARY, UserRole.FINANCE)
         val file = exportChequeCsv(call.pathId())
         call.response.header(

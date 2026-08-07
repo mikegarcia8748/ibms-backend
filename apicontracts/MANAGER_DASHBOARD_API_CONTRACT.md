@@ -186,6 +186,12 @@ excluded by default** (a draft is an in-progress compilation). Pass an explicit
 | `providerId` | `string (UUID)` | Filter by ISP/provider. |
 | `billingPeriod` | `string` | `YYYY-MM`. |
 | `status` | `string` | One of `compiled`, `approved`, `paid` (`draft` is never included even if requested via this endpoint's default; passing `draft` explicitly will filter to drafts). |
+
+> **While `TOPSHEET_RFP_FLOW_ENABLED=false` (the default), every new topsheet stays `compiled`.**
+> `approved` and `paid` are only reachable where the external RFP/finance chain is enabled, so
+> those two filters return historical rows only — hide the tabs. Billing history itself is
+> **unaffected**: it keys on "not a draft", which `compiled` already satisfies, so a confirmed
+> topsheet appears here exactly as before. Nothing here needs changing to accommodate the flag.
 | `cursor`, `limit` | | Pagination. |
 
 ```

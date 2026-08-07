@@ -634,11 +634,23 @@ All transitions are terminal — no reversal or re-opening.
 
 ### TopSheet Lifecycle
 
+> ⚠️ **This section is stale — `apicontracts/TOPSHEET_COMPILE_API_CONTRACT.md` is authoritative.**
+> The rules below describe a `POST /topsheets/compile` + `POST /{id}/approve` pair and an
+> `ApproveTopSheetUseCase` that no longer exist. The real lifecycle is
+> `draft → confirm → generate-rfp → release-to-finance → pay`, with `cancel` voiding a draft or
+> compiled topsheet.
+>
+> As shipped, everything after `confirm` is switched off behind `TOPSHEET_RFP_FLOW_ENABLED`
+> (default `false`), so **`compiled` is the terminal status** and the deliverable is
+> `GET /exports/topsheet/{id}.xlsx`. Reconciling the rest of this section is tracked separately.
+
 ```
-COMPILED ──(finance approves)──→ APPROVED ──(finance pays)──→ PAID
+DRAFT ──(confirm)──→ COMPILED ──(generate-rfp)──→ RFP_ASSIGNED ──(release)──→ APPROVED ──(pay)──→ PAID
+                        │                          ⚠️ flag-gated from here on
+        └───(cancel, reason required)───→ CANCELLED
 ```
 
-All transitions are one-way; no reversal endpoints exist.
+All transitions are one-way; no reversal endpoints exist beyond `cancel`.
 
 - **Rule:** Compiling a TopSheet requires `SECRETARY` role and is idempotent (via `Idempotency-Key` header).
   - **Enforcement point:** Controller RBAC (`TopSheetController.kt`); `CompileTopSheetUseCase` uses `idempotent()` wrapper.

@@ -393,6 +393,33 @@ class AppConfigSpec : BehaviorSpec({
         }
     }
 
+    Given("the topsheet RFP-flow feature flag") {
+        When("TOPSHEET_RFP_FLOW_ENABLED is unset") {
+            Then("it is off, so a deployment that says nothing gets the compiled-terminal flow") {
+                AppConfig.fromEnv(dev()).topsheet.rfpFlowEnabled shouldBe false
+                AppConfig.fromEnv(prod()).topsheet.rfpFlowEnabled shouldBe false
+            }
+        }
+
+        When("it is set to true") {
+            Then("the external chain is enabled in dev and prod alike — no hardened-only rule applies") {
+                AppConfig.fromEnv(dev("TOPSHEET_RFP_FLOW_ENABLED" to "true")).topsheet.rfpFlowEnabled shouldBe true
+                AppConfig.fromEnv(prod("TOPSHEET_RFP_FLOW_ENABLED" to "true")).topsheet.rfpFlowEnabled shouldBe true
+            }
+        }
+
+        // Silently reading a typo as false would disable a flow someone had deliberately
+        // switched back on, and nothing downstream would say so.
+        When("it is set to something that is neither true nor false") {
+            Then("the boot fails naming the key, rather than quietly falling back to off") {
+                val ex = shouldThrow<ConfigException> {
+                    AppConfig.fromEnv(dev("TOPSHEET_RFP_FLOW_ENABLED" to "yes"))
+                }
+                ex.message!! shouldContain "TOPSHEET_RFP_FLOW_ENABLED"
+            }
+        }
+    }
+
     Given("the presign signing key") {
         When("PRESIGN_SECRET is unset") {
             Then("it is derived from the JWT secret, never equal to it") {

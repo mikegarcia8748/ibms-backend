@@ -16,11 +16,16 @@ import com.puregoldbe.ibms.application.usecase.UpdateDraftLineUseCase
 import com.puregoldbe.ibms.domain.model.CompileRequest
 import com.puregoldbe.ibms.domain.model.ConfirmRequest
 import com.puregoldbe.ibms.domain.model.UserRole
+import com.puregoldbe.ibms.infrastructure.config.TopSheetFeatures
 import io.ktor.server.request.*
 import io.ktor.server.routing.*
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
+/**
+ * [features] gates the post-compile chain (generate-rfp -> release-to-finance -> pay).
+ * Those three use cases stay wired and unmodified either way; only their doors close.
+ */
 fun Route.topSheetRoutes(
     preview: PreviewCompilationUseCase,
     createDraft: CreateDraftTopSheetUseCase,
@@ -34,6 +39,7 @@ fun Route.topSheetRoutes(
     get: GetTopSheetUseCase,
     details: GetTopSheetDetailsUseCase,
     pay: PayTopSheetUseCase,
+    features: TopSheetFeatures,
 ) {
     route("/topsheets") {
         get {
@@ -71,12 +77,14 @@ fun Route.topSheetRoutes(
             call.ok(updateLine(call.pathId(), lineId, req.proratedAmount))
         }
         post("/{id}/generate-rfp") {
+            requireEnabled(features.rfpFlowEnabled, "generate-rfp")
             val caller = call.authorize(UserRole.SECRETARY)
             val id = call.pathId()
             val idem = call.idempotencyContext(caller.userId, "topsheet.generate_rfp:$id")
             call.ok(generateRfp(id, caller.userId, idem))
         }
         post("/{id}/release-to-finance") {
+            requireEnabled(features.rfpFlowEnabled, "release-to-finance")
             val caller = call.authorize(UserRole.SECRETARY)
             call.ok(releaseToFinance(call.pathId(), caller.userId))
         }
@@ -94,7 +102,10 @@ fun Route.topSheetRoutes(
         }
         post("/{id}/cancel") {
             val caller = call.authorize(UserRole.SECRETARY)
-            call.ok(cancel(call.pathId(), caller.userId))
+            // Received defensively like /pay: a missing or malformed body funnels into the
+            // use case's own Validation -> clean 400, not a raw deserialization error.
+            val reason = runCatching { call.receiveNullable<CancelTopSheetRequest>() }.getOrNull()?.reason ?: ""
+            call.ok(cancel(call.pathId(), caller.userId, reason))
         }
         get("/{id}") {
             call.authorize()
@@ -105,6 +116,7 @@ fun Route.topSheetRoutes(
             call.ok(details(call.pathId()))
         }
         post("/{id}/pay") {
+            requireEnabled(features.rfpFlowEnabled, "topsheet payment")
             val caller = call.authorize(UserRole.FINANCE)
             val id = call.pathId()
             // Receive defensively: a missing/blank body funnels into the use case's
