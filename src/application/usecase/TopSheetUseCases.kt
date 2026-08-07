@@ -634,23 +634,41 @@ class ConfirmTopSheetUseCase(
  * is moved to CANCELLED (the header is kept for audit) and its lines are deleted so the
  * accounts become immediately re-billable. Blocked once the topsheet has reached
  * RFP_ASSIGNED or beyond — at that point the external RFP transaction already exists.
+ *
+ * [reason] is mandatory and lands in the audit trail. Cancelling a COMPILED topsheet
+ * destroys a billing-history record that already carries a minted invoice number, and
+ * with the RFP chain switched off COMPILED is the terminal status — so there is no
+ * later point-of-no-return to stop it happening months after the fact. Requiring a
+ * stated reason does not prevent that; it makes it attributable.
  */
 class CancelTopSheetUseCase(
     private val topsheets: TopSheetRepository,
     private val activity: ActivityRecorder,
     private val tx: TransactionRunner,
 ) {
-    suspend operator fun invoke(topsheetId: String, callerId: String): TopSheet = tx.inTransaction {
-        val ts = topsheets.findById(topsheetId)
-            ?: throw DomainError.NotFound("topsheet $topsheetId not found")
-        if (ts.status != TopSheetStatus.DRAFT && ts.status != TopSheetStatus.COMPILED) {
-            throw DomainError.Conflict(
-                "only draft or compiled topsheets can be cancelled (was ${ts.status.name.lowercase()})",
-            )
+    suspend operator fun invoke(topsheetId: String, callerId: String, reason: String): TopSheet {
+        // Validated before the transaction opens: a missing body must not cost a round trip.
+        val trimmed = reason.trim()
+        if (trimmed.isEmpty()) throw DomainError.Validation("reason is required to cancel a topsheet")
+        if (trimmed.length > MAX_REASON_LENGTH) {
+            throw DomainError.Validation("reason must be at most $MAX_REASON_LENGTH characters")
         }
-        val cancelled = topsheets.cancel(topsheetId)
-            ?: throw DomainError.Conflict("topsheet $topsheetId is no longer in a cancellable status")
-        activity.record(callerId, "topsheet.cancelled", "topsheet", topsheetId)
-        cancelled
+        return tx.inTransaction {
+            val ts = topsheets.findById(topsheetId)
+                ?: throw DomainError.NotFound("topsheet $topsheetId not found")
+            if (ts.status != TopSheetStatus.DRAFT && ts.status != TopSheetStatus.COMPILED) {
+                throw DomainError.Conflict(
+                    "only draft or compiled topsheets can be cancelled (was ${ts.status.name.lowercase()})",
+                )
+            }
+            val cancelled = topsheets.cancel(topsheetId)
+                ?: throw DomainError.Conflict("topsheet $topsheetId is no longer in a cancellable status")
+            activity.record(callerId, "topsheet.cancelled", "topsheet", topsheetId, details = trimmed)
+            cancelled
+        }
+    }
+
+    private companion object {
+        const val MAX_REASON_LENGTH = 500
     }
 }

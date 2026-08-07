@@ -71,7 +71,11 @@ class ExportChequePaymentCsvUseCaseSpec : BehaviorSpec({
             val text = useCase("ts1").bytes.decodeToString()
 
             Then("the arrears column and the combined grand total are carried") {
-                text shouldContain "BR-1,SM North,CID-1,ACC-1,1200.00,500.00,CONV-202607-0001"
+                // The INVOICE NUMBER column is the per-account reference (ACCT# + rental
+                // period), not the topsheet's batch number CONV-202607-0001 — that one is
+                // in the meta block and would otherwise repeat on every row.
+                text shouldContain "BR-1,SM North,CID-1,ACC-1,1200.00,500.00,ACC-1JUL2026"
+                text shouldContain "BR-2,SM South,CID-2,ACC-2,800.00,0.00,ACC-2JUL2026"
                 text shouldContain "GRAND TOTAL,,,,,2000.00,500.00,2500.00"
             }
         }

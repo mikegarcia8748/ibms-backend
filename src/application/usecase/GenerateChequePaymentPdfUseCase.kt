@@ -14,6 +14,7 @@ import com.puregoldbe.ibms.domain.model.TopSheet
 import com.puregoldbe.ibms.domain.model.TopSheetDetail
 import com.puregoldbe.ibms.domain.port.TopSheetRepository
 import com.puregoldbe.ibms.domain.port.TransactionRunner
+import com.puregoldbe.ibms.domain.service.InvoiceNumberFormatter
 import java.io.ByteArrayOutputStream
 import java.math.BigDecimal
 
@@ -101,7 +102,11 @@ class GenerateChequePaymentPdfUseCase(
             table.addCell(PdfPCell(Phrase(line.accountNumber ?: "", normal)))
             table.addCell(PdfPCell(Phrase(line.proratedAmount, normal)).apply { horizontalAlignment = Element.ALIGN_RIGHT })
             table.addCell(PdfPCell(Phrase(line.arrearsAmount, normal)).apply { horizontalAlignment = Element.ALIGN_RIGHT })
-            table.addCell(PdfPCell(Phrase(ts.invoiceNumber ?: "", normal)))
+            // Per-account reference (ACCT# + rental period), matching the TopSheet report.
+            // The topsheet's own batch number is in the meta block above.
+            table.addCell(
+                PdfPCell(Phrase(InvoiceNumberFormatter.forAccount(line.accountNumber, line.billingPeriod), normal)),
+            )
         }
 
         table.addCell(

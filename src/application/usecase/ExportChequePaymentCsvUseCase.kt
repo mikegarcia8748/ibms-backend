@@ -5,6 +5,7 @@ import com.puregoldbe.ibms.domain.model.TopSheet
 import com.puregoldbe.ibms.domain.model.TopSheetDetail
 import com.puregoldbe.ibms.domain.port.TopSheetRepository
 import com.puregoldbe.ibms.domain.port.TransactionRunner
+import com.puregoldbe.ibms.domain.service.InvoiceNumberFormatter
 import java.math.BigDecimal
 
 /**
@@ -71,7 +72,9 @@ class ExportChequePaymentCsvUseCase(
                 .append(q(l.accountNumber)).append(',')
                 .append(q(l.proratedAmount)).append(',')
                 .append(q(l.arrearsAmount)).append(',')
-                .append(q(ts.invoiceNumber)).append(nl)
+                // Per-account reference (ACCT# + rental period), matching the TopSheet
+                // report. The topsheet's own batch number is in the meta block above.
+                .append(q(InvoiceNumberFormatter.forAccount(l.accountNumber, l.billingPeriod))).append(nl)
         }
         sb.append("GRAND TOTAL,,,,,")
             .append(mrcTotal.toPlainString()).append(',')

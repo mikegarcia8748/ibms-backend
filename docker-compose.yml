@@ -62,6 +62,11 @@ services:
       SMTP_SSL: ${SMTP_SSL:-false}
       MAIL_FROM_EMAIL: ${MAIL_FROM_EMAIL:-}
       MAIL_FROM_NAME: ${MAIL_FROM_NAME:-IBMS Notifications}
+      # generate-rfp / release-to-finance / pay / the cheque exports. Off by default:
+      # the topsheet lifecycle ends at COMPILED and the deliverable is the xlsx export.
+      # Listed here because this block is an allowlist — without the line, compose has
+      # no way to flip it.
+      TOPSHEET_RFP_FLOW_ENABLED: ${TOPSHEET_RFP_FLOW_ENABLED:-false}
     volumes:
       - ibms-storage:/app/storage
 

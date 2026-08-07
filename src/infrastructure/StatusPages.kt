@@ -31,6 +31,7 @@ fun Application.configureStatusPages() {
                 is DomainError.Forbidden -> HttpStatusCode.Forbidden
                 is DomainError.NotFound -> HttpStatusCode.NotFound
                 is DomainError.Conflict -> HttpStatusCode.Conflict
+                is DomainError.Disabled -> HttpStatusCode.ServiceUnavailable
             }
             // `code` stays server-side (logged/available on DomainError) but is not on the wire.
             call.respond(status, ErrorEnvelope("error", status.value.toString(), cause.message ?: "error", null))

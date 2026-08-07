@@ -6,15 +6,28 @@ Base URL: `/` · Auth: `Authorization: Bearer <JWT>`
 
 **Prerequisite:** the topsheet must already be in `approved` status (released to finance). Reaching `approved` is covered by the TopSheet compilation lifecycle contract; this contract picks up from there.
 
+> ### ⚠️ This entire feature is currently disabled
+>
+> `POST /topsheets/{id}/pay` and both cheque exports sit behind `TOPSHEET_RFP_FLOW_ENABLED`,
+> which is **off by default** — together with `generate-rfp` and `release-to-finance`, whose
+> `approved` status this feature requires. While it is off all three routes stay registered and
+> answer **`503 Service Unavailable`**; no topsheet can reach `approved`, so none can be paid.
+>
+> The contract stays published because none of the code was removed: setting the variable to
+> `true` restores everything below unchanged, with no migration and no backfill. See the callout
+> in `TOPSHEET_COMPILE_API_CONTRACT.md`.
+
 ---
 
 ## Endpoints
 
+All three answer `503` unless `TOPSHEET_RFP_FLOW_ENABLED=true`.
+
 | Method | Path | Auth | Notes |
 |--------|------|------|-------|
-| POST | `/topsheets/{id}/pay` | Bearer (**finance**) | Record the cheque number and transition `approved` → `paid`. **Idempotent**. |
-| GET | `/exports/topsheet/{id}/cheque.pdf` | Bearer (**secretary / finance**) | Download the Cheque Payment Voucher as a PDF. Requires the topsheet to be paid. |
-| GET | `/exports/topsheet/{id}/cheque.csv` | Bearer (**secretary / finance**) | Download the same voucher as a CSV. Requires the topsheet to be paid. |
+| POST | `/topsheets/{id}/pay` | Bearer (**finance**) | **⚠️** Record the cheque number and transition `approved` → `paid`. **Idempotent**. |
+| GET | `/exports/topsheet/{id}/cheque.pdf` | Bearer (**secretary / finance**) | **⚠️** Download the Cheque Payment Voucher as a PDF. Requires the topsheet to be paid. |
+| GET | `/exports/topsheet/{id}/cheque.csv` | Bearer (**secretary / finance**) | **⚠️** Download the same voucher as a CSV. Requires the topsheet to be paid. |
 
 > `sysadmin` is admitted to every endpoint.
 
@@ -24,9 +37,9 @@ Base URL: `/` · Auth: `Authorization: Bearer <JWT>`
 
 ```mermaid
 stateDiagram-v2
-    APPROVED --> PAID: POST /topsheets/{id}/pay  (chequeNumber required)
-    PAID --> PAID: GET /exports/topsheet/{id}/cheque.pdf
-    PAID --> PAID: GET /exports/topsheet/{id}/cheque.csv
+    APPROVED --> PAID: POST /topsheets/{id}/pay ⚠️ flag-gated (chequeNumber required)
+    PAID --> PAID: GET /exports/topsheet/{id}/cheque.pdf ⚠️ flag-gated
+    PAID --> PAID: GET /exports/topsheet/{id}/cheque.csv ⚠️ flag-gated
 ```
 
 The cheque number is captured on the existing pay step — there is **no new status**. Once `paid`, the topsheet header carries `chequeNumber` and `paidAt`, and every line item flips to `paid`.
@@ -132,7 +145,12 @@ Bearer token. Allowed roles: **secretary**, **finance** (and `sysadmin`).
 | 5 | ACCT# | `accountNumber` |
 | 6 | MRC | `proratedAmount` |
 | 7 | ARREARS | `arrearsAmount` |
-| 8 | INVOICE NUMBER | topsheet `invoiceNumber` |
+| 8 | INVOICE NUMBER | **per-account** reference: `accountNumber` + the rental period as `MONYYYY` |
+
+The INVOICE NUMBER column is per row, matching the TopSheet report: account `71214756`
+billed for `2026-07` gives `71214756JUL2026`. The topsheet's own `invoiceNumber`
+(`CONV-202607-0012`) identifies the compilation batch and appears only in the meta block
+and the filename.
 
 The `GRAND TOTAL` row breaks the total out across the last three columns: the MRC
 subtotal (Σ `proratedAmount`) under **MRC**, the arrears subtotal (Σ `arrearsAmount`)
@@ -169,8 +187,8 @@ Cheque Number,CHQ-0001
 Payment Date,2026-07-27T06:15:00Z
 
 NO.,STORE CO,STORE NAME,CID#,ACCT#,MRC,ARREARS,INVOICE NUMBER
-1,118,PUREGOLD QI CENTRAL,IC-AWZ-2200,71214756,5598.00,500.00,CONV-202607-0012
-2,050,PUREGOLD JR ANTIPOLO,,88123456,2798.00,0.00,CONV-202607-0012
+1,118,PUREGOLD QI CENTRAL,IC-AWZ-2200,71214756,5598.00,500.00,71214756JUL2026
+2,050,PUREGOLD JR ANTIPOLO,,88123456,2798.00,0.00,88123456JUL2026
 GRAND TOTAL,,,,,8396.00,500.00,8896.00
 ```
 
@@ -206,6 +224,12 @@ All non-binary errors follow the standard envelope:
 | `404` | all | Topsheet not found | `"topsheet <id> not found"` |
 | `401` | all | Missing / invalid bearer token | Standard unauthorized response |
 | `403` | all | Caller lacks the required role | Standard forbidden response |
+| `503` | all | `TOPSHEET_RFP_FLOW_ENABLED=false` (the default) | `"<endpoint> is temporarily disabled on this deployment — …"` (code `feature_disabled`) |
+
+While the feature is disabled the `503` **pre-empts every other row in this table**: the guard
+runs before the role check and before any database read, so a wrong role yields `503` rather than
+`403`, and an unknown id yields `503` rather than `404`. Only `401` still wins, because
+authentication runs ahead of the route handler.
 
 ---
 

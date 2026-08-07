@@ -137,6 +137,7 @@ With `APP_ENV=prod` the app **validates everything at startup and refuses to boo
 | `SMTP_STARTTLS` / `SMTP_SSL` | `true`/`false` — mutually exclusive; `SSL` only with port 465 | a typo in either fails the boot rather than silently downgrading to plaintext |
 | `MAIL_FROM_EMAIL` | the generic address the relay will send as | ✅ (defaults to `SMTP_USERNAME`) |
 | `MAIL_FROM_NAME` | `IBMS Notifications` | |
+| `TOPSHEET_RFP_FLOW_ENABLED` | `false` — the topsheet lifecycle ends at `compiled` and the deliverable is the Excel export | optional; defaults to `false`. Set `true` only once the external RFP system has a real adapter — the current gateway is a simulator that mints fabricated RFP numbers. Anything other than `true`/`false` fails the boot |
 
 > Per [SECURITY.md](../SECURITY.md), `JWT_SECRET`, `DB_PASSWORD` and the bootstrap-admin credential must all be real values before production. These are now enforced by `AppConfig.fromEnv()` rather than left to the operator, so a missing one is a startup failure with a named key.
 

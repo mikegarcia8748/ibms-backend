@@ -3,8 +3,10 @@ package com.puregoldbe.ibms.application.usecase
 import com.puregoldbe.ibms.domain.error.DomainError
 import com.puregoldbe.ibms.domain.model.TopSheet
 import com.puregoldbe.ibms.domain.model.TopSheetDetail
+import com.puregoldbe.ibms.domain.model.TopSheetStatus
 import com.puregoldbe.ibms.domain.port.TopSheetRepository
 import com.puregoldbe.ibms.domain.port.TransactionRunner
+import com.puregoldbe.ibms.domain.service.InvoiceNumberFormatter
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import java.io.ByteArrayOutputStream
 import java.math.BigDecimal
@@ -24,6 +26,19 @@ class ExportTopSheetExcelUseCase(
     suspend operator fun invoke(topsheetId: String): Export {
         val (topsheet, lines) = tx.inTransaction {
             val ts = topsheets.findById(topsheetId) ?: throw DomainError.NotFound("topsheet $topsheetId not found")
+            // An allow-list, so a status added later is refused until someone decides it
+            // belongs here. DRAFT has no invoice number yet (minted at confirm) and its
+            // amounts are still editable, so the workbook would be filed as
+            // "TopSheet_null_2026-07.xlsx" with a blank INVOICE NUMBER column. CANCELLED
+            // has had every line deleted by the cancel, so it would export a header over
+            // an empty table whose 0.00 GRAND TOTAL contradicts the retained totalAmount.
+            if (ts.status !in EXPORTABLE) {
+                throw DomainError.Conflict(
+                    "topsheet $topsheetId cannot be exported in ${ts.status.name.lowercase()} status; " +
+                        "confirm it first",
+                    "not_exportable",
+                )
+            }
             ts to topsheets.findLines(topsheetId)
         }
         return Export(
@@ -82,7 +97,10 @@ class ExportTopSheetExcelUseCase(
                 createCell(4).setCellValue(line.accountNumber ?: "")
                 createCell(5).setCellValue(line.proratedAmount.toDouble()) // display only; totals are BigDecimal
                 createCell(6).setCellValue(line.arrearsAmount.toDouble()) // display only; totals are BigDecimal
-                createCell(7).setCellValue(ts.invoiceNumber ?: "")
+                // Per-account reference (ACCT# + rental period), NOT the topsheet's batch
+                // number — that one belongs in the meta block above and is the same on
+                // every row, which is exactly what made this column useless.
+                createCell(7).setCellValue(InvoiceNumberFormatter.forAccount(line.accountNumber, line.billingPeriod))
             }
         }
 
@@ -103,5 +121,15 @@ class ExportTopSheetExcelUseCase(
             wb.write(out)
             out.toByteArray()
         }
+    }
+
+    private companion object {
+        /** Statuses that carry a minted invoice number and intact line items. */
+        val EXPORTABLE = setOf(
+            TopSheetStatus.COMPILED,
+            TopSheetStatus.RFP_ASSIGNED,
+            TopSheetStatus.APPROVED,
+            TopSheetStatus.PAID,
+        )
     }
 }

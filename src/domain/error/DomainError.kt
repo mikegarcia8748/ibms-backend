@@ -21,4 +21,14 @@ sealed class DomainError(message: String, val code: String) : RuntimeException(m
 
     /** Rule conflict (e.g. duplicate branch_code, double-billing, last sysadmin). 409. */
     class Conflict(message: String, code: String = "conflict") : DomainError(message, code)
+
+    /**
+     * The route exists but the feature behind it is switched off on this deployment. 503.
+     *
+     * Not 404 — the route is registered and answers again the moment the flag flips, and
+     * a 404 on a live deployment reads as a routing fault worth paging someone over. Not
+     * 409 either: nothing about the resource's state caused this. Since [code] never
+     * reaches the wire (see StatusPages), the *message* has to say what is off.
+     */
+    class Disabled(message: String, code: String = "feature_disabled") : DomainError(message, code)
 }

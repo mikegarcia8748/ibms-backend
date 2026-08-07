@@ -118,3 +118,11 @@ data class UpdateLineRequest(
 /** Cheque number recorded by Finance to fully pay (close) a topsheet. */
 @Serializable
 data class PayTopSheetRequest(val chequeNumber: String)
+
+/**
+ * Why a topsheet is being voided. Mandatory: cancelling deletes the line items, which
+ * erases the billing-history record and frees the accounts to be billed again — after
+ * an invoice number has already been minted. That has to be attributable to someone.
+ */
+@Serializable
+data class CancelTopSheetRequest(val reason: String)
