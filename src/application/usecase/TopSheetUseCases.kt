@@ -5,6 +5,7 @@ import com.puregoldbe.ibms.domain.model.Account
 import com.puregoldbe.ibms.domain.model.CompilableLine
 import com.puregoldbe.ibms.domain.model.CompilablePreview
 import com.puregoldbe.ibms.domain.model.CursorPage
+import com.puregoldbe.ibms.domain.model.DeepLinks
 import com.puregoldbe.ibms.domain.model.NotYetSubscribedLine
 import com.puregoldbe.ibms.domain.model.NotificationContext
 import com.puregoldbe.ibms.domain.model.NotificationEvent
@@ -35,6 +36,7 @@ import com.puregoldbe.ibms.domain.service.BILLING_ZONE
 import com.puregoldbe.ibms.domain.service.InvoiceNumberFormatter
 import com.puregoldbe.ibms.domain.service.ProrationEngine
 import com.puregoldbe.ibms.domain.valueobject.BillingPeriod
+import com.puregoldbe.ibms.domain.valueobject.Money
 import com.puregoldbe.ibms.domain.valueobject.toMoney
 import com.puregoldbe.ibms.domain.valueobject.toMoneyOrNull
 import com.puregoldbe.ibms.domain.valueobject.toMoneyString
@@ -472,11 +474,12 @@ class ReleaseToFinanceUseCase(
                 details = listOfNotNull(
                     released.invoiceNumber?.let { "Invoice" to it },
                     released.providerName?.let { "Provider" to it },
-                    "Billing period" to released.billingPeriod,
-                    "Total" to released.totalAmount,
+                    "Billing Period" to released.billingPeriod,
+                    "Total Amount" to Money.display(released.totalAmount),
                 ),
                 entityId = topsheetId,
-                linkPath = "/topsheets/$topsheetId",
+                actorId = callerId,
+                linkPath = DeepLinks.topsheet(topsheetId),
             ),
         )
         released
@@ -616,12 +619,13 @@ class ConfirmTopSheetUseCase(
                     details = listOfNotNull(
                         confirmed.invoiceNumber?.let { "Invoice" to it },
                         confirmed.providerName?.let { "Provider" to it },
-                        "Billing period" to confirmed.billingPeriod,
-                        "Accounts" to confirmed.accountCount.toString(),
-                        "Total" to confirmed.totalAmount,
+                        "Billing Period" to confirmed.billingPeriod,
+                        "Total Accounts" to confirmed.accountCount.toString(),
+                        "Total Amount" to Money.display(confirmed.totalAmount),
                     ),
                     entityId = topsheetId,
-                    linkPath = "/topsheets/$topsheetId",
+                    actorId = confirmerId,
+                    linkPath = DeepLinks.topsheet(topsheetId),
                 ),
             )
             confirmed

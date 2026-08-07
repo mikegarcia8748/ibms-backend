@@ -962,6 +962,7 @@ The following actions are recorded in the activity log:
 | Action | Trigger | Use Case |
 |--------|---------|----------|
 | `account.created` | Account created | `CreateAccountUseCase` |
+| `account.updated` | Account details edited directly | `UpdateAccountUseCase` |
 | `account.transferred` | Account transferred | `TransferAccountUseCase` |
 | `account.deactivation_requested` | Deactivation requested | `DeactivateAccountUseCase` |
 | `account.deactivation_cancelled` | Deactivation cancelled, account reverted to active | `CancelDeactivationUseCase` |
@@ -981,7 +982,6 @@ The following mutations do **not** record an activity log entry:
 
 | Mutation | Use Case | Status |
 |----------|----------|--------|
-| Account update (`PUT /accounts/{id}`) | `UpdateAccountUseCase` | **NOT ENFORCED** — no `activity.record()` call |
 | Store update (`PUT /stores/{id}`) | `UpdateStoreUseCase` | **NOT ENFORCED** |
 | Store close (`POST /stores/{id}/deactivate`) | `CloseStoreUseCase` | **NOT ENFORCED** |
 | Provider create/update/deactivate | `CreateProviderUseCase`, etc. | **NOT ENFORCED** |

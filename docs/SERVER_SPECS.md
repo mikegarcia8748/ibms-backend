@@ -99,13 +99,14 @@ The app is a self-contained fat jar (`ibms-backend-all.jar`); no external servic
 - **Public (internet-facing):** `443` (HTTPS) and `80` (HTTP → HTTPS redirect), served by the reverse proxy.
 - **Internal only (do not expose):** app `8080` and PostgreSQL `5432` — bind to `127.0.0.1` / the Docker network, never `0.0.0.0` publicly.
 - **TLS** is mandatory in production; terminate it at the reverse proxy (or a cloud load balancer). Caddy auto-provisions Let's Encrypt certs with near-zero config.
-- **CORS:** set `CORS_ALLOWED_HOSTS` to the real Wasm-client origin(s). If unset, CORS falls back to `anyHost()` (dev-only) — see SECURITY.md.
+- **CORS:** set `CORS_ALLOWED_HOSTS` to the real Wasm-client host(s), bare `host[:port]` with no scheme. If unset, CORS falls back to `anyHost()` (dev-only) — see SECURITY.md.
 - A static public IP + DNS record for the client origin.
 
 ### Production env vars that must be set (from SECURITY.md)
 - `JWT_SECRET` — strong random string (not the built-in default).
 - `BOOTSTRAP_ADMIN_PASSWORD` — set it explicitly rather than letting the backend generate + log one.
-- `CORS_ALLOWED_HOSTS` — the real client origin(s).
+- `CORS_ALLOWED_HOSTS` — the real client host(s), bare and without a scheme.
+- `APP_URL` / `WEB_CLIENT_URL` — this API's origin and the web client's origin. Must differ; notification email buttons are built from the latter.
 - `DB_URL` / `DB_USER` / `DB_PASSWORD` — production Postgres credentials.
 
 ---

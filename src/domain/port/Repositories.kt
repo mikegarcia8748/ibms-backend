@@ -154,6 +154,17 @@ data class AccountAggregate(val accountCount: Int, val totalMrc: Money)
 
 interface AccountRepository {
     fun findById(id: String): Account?
+
+    /**
+     * [findById] taking a row lock, for the lifecycle operations that read the status,
+     * decide, then write. Without it two concurrent requests both observe `ACTIVE` and
+     * both proceed — e.g. a transfer and a deactivation racing, which resurrects the
+     * transferred source row into `termination_requested` and bills one circuit twice.
+     * The conditional writes below are the second line of defence; this one makes the
+     * loser fail fast, before it has done any side-effect work.
+     */
+    fun findByIdForUpdate(id: String): Account?
+
     fun list(storeId: String?, providerId: String?, status: AccountStatus?): List<Account>
     fun page(storeId: String?, providerId: String?, status: AccountStatus?, cursor: String?, limit: Int): CursorPage<Account>
     /**
@@ -163,16 +174,21 @@ interface AccountRepository {
      * COALESCE(circuit_id,'') unique index, so no-circuit accounts still dedupe. Scoping
      * by store lets the same account number recur across stores as distinct accounts.
      */
-    fun existsByIdentity(storeId: String, providerId: String, accountNumber: String, circuitId: String?): Boolean
+    fun existsByIdentity(storeId: String, providerId: String, accountNumber: String, circuitId: String?): Boolean =
+        findLiveByIdentity(storeId, providerId, accountNumber, circuitId) != null
 
     /**
-     * The LIVE account with this identity, or null — same predicate as [existsByIdentity],
-     * which is defined in terms of this so the two can never drift.
+     * The live account holding this identity, or null. Same rule as [existsByIdentity] —
+     * this is the primitive, that one is the predicate over it, so the two cannot drift.
      *
-     * Bulk import needs the row itself, not just its existence, to tell "matched and
-     * unchanged" from "matched with a rate that moved".
+     * Callers use this when the conflict message needs to say WHICH account is in the way:
+     * with one account number legitimately recurring across stores and circuits, "already
+     * exists" alone leaves the operator guessing, and an account sitting out its 30-day
+     * termination grace still occupies the slot without being active. Bulk import uses it
+     * for a second reason — it needs the row itself to tell "matched and unchanged" from
+     * "matched with a rate that moved".
      */
-    fun findByIdentity(storeId: String, providerId: String, accountNumber: String, circuitId: String?): Account?
+    fun findLiveByIdentity(storeId: String, providerId: String, accountNumber: String, circuitId: String?): Account?
 
     fun create(input: AccountUpsertRequest, createdBy: String?): Account
     fun update(id: String, input: AccountUpsertRequest): Account?
@@ -215,9 +231,18 @@ interface AccountRepository {
         limit: Int,
     ): CursorPage<AccountListItem>
 
-    fun updateStatus(id: String, status: AccountStatus): Account?
+    /**
+     * Move the account to [status], but ONLY if it is currently [expected]; returns null
+     * otherwise so the caller can raise a conflict instead of silently clobbering a
+     * transition another transaction just made. [expected] has no default on purpose —
+     * an unconditional status write is the bug this parameter exists to prevent.
+     */
+    fun updateStatus(id: String, status: AccountStatus, expected: AccountStatus): Account?
 
-    /** Start the 30-day grace window: status -> termination_requested, timestamp set. */
+    /**
+     * Start the 30-day grace window: status -> termination_requested, timestamp set.
+     * Applies only to an account still `active`; returns null otherwise.
+     */
     fun markTerminationRequested(id: String, at: Instant): Account?
 
     /**
@@ -241,7 +266,11 @@ interface AccountRepository {
     /** The links of one transfer, across both the source and destination account. */
     fun listProofsByTransfer(transferId: String): List<AccountProofLink>
 
-    /** Revert deactivation: status -> ACTIVE, clear terminationRequestedAt. */
+    /**
+     * Revert deactivation: status -> ACTIVE, clear terminationRequestedAt. Applies only
+     * to an account still in `termination_requested`; returns null otherwise, so a cancel
+     * racing the grace-expiry job cannot resurrect an account the job just archived.
+     */
     fun cancelTerminationRequested(id: String): Account?
 
     /** Find accounts whose grace period has expired (DB-side filtering). */

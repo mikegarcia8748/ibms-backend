@@ -256,7 +256,7 @@ class BulkImportAccountsUseCase(
                         }
                     }
 
-                    val existingAccount = accounts.findByIdentity(storeId, provider.id, row.accountNumber, row.circuitId)
+                    val existingAccount = accounts.findLiveByIdentity(storeId, provider.id, row.accountNumber, row.circuitId)
                     val accountOutcome = if (existingAccount != null) {
                         // Matched. Refresh the rate if the sheet disagrees — the import is the
                         // correction path for MRC changes. Compare as BigDecimal so "2798" and

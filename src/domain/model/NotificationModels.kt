@@ -154,10 +154,20 @@ data class UserNotificationSubscriptionRow(
  */
 data class NotificationContext(
     val headline: String,
+    /**
+     * Who performed the action. Call sites set [actorId]; `NotificationService`
+     * resolves the display name into here once, so no use case needs a user
+     * repository of its own. Null for the system jobs, which have no actor.
+     */
     val actorName: String? = null,
     val details: List<Pair<String, String>> = emptyList(),
     val entityId: String? = null,
-    /** Relative path appended to `appUrl` for a "view in IBMS" link, e.g. "/accounts/{id}". */
+    /** The acting user's id, resolved to [actorName] at enqueue time. */
+    val actorId: String? = null,
+    /**
+     * Relative path into the **web client** for the "view in IBMS" button — build it
+     * with [DeepLinks], which documents why this is never a path on this API.
+     */
     val linkPath: String? = null,
 )
 

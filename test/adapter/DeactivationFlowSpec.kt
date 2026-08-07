@@ -317,6 +317,47 @@ class DeactivationFlowSpec : BehaviorSpec({
         }
     }
 
+    Given("one Idempotency-Key reused against a different account") {
+        When("the same key and payload are posted to a second account") {
+            Then("409 — and the second account is untouched, not silently skipped") {
+                testApplication {
+                    application { testModule() }
+                    val admin = signIn()
+                    val sec = signIn(UserRole.SECRETARY)
+                    val accountA = setupActiveAccount(admin.token)
+                    val accountB = setupActiveAccount(admin.token)
+
+                    val proofId = createAttachment(sec.token, "deactivation_proof")
+                    val idemKey = "cross-account-${System.nanoTime()}"
+
+                    client.post("/accounts/$accountA/deactivate") {
+                        header(HttpHeaders.Authorization, "Bearer ${sec.token}")
+                        header("Idempotency-Key", idemKey)
+                        contentType(ContentType.Application.Json)
+                        setBody("""{"proofId":"$proofId"}""")
+                    }.status shouldBe HttpStatusCode.OK
+
+                    // The account id is part of the request hash, so this is a DIFFERENT
+                    // request under a key that is already spent. It used to hash to the
+                    // same value and replay, answering 200 with account A's payload while
+                    // account B stayed active and nobody noticed.
+                    val second = client.post("/accounts/$accountB/deactivate") {
+                        header(HttpHeaders.Authorization, "Bearer ${sec.token}")
+                        header("Idempotency-Key", idemKey)
+                        contentType(ContentType.Application.Json)
+                        setBody("""{"proofId":"$proofId"}""")
+                    }
+                    second.status shouldBe HttpStatusCode.Conflict
+
+                    // B is still active, and the caller was told so rather than misled.
+                    client.get("/accounts/$accountB") {
+                        header(HttpHeaders.Authorization, "Bearer ${admin.token}")
+                    }.bodyAsText().asJson().data().str("status") shouldBe "active"
+                }
+            }
+        }
+    }
+
     // =================================================================
     //  STATUS FILTER
     // =================================================================

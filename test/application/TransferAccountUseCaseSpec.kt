@@ -6,6 +6,9 @@ import com.puregoldbe.ibms.domain.model.Account
 import com.puregoldbe.ibms.domain.model.AccountStatus
 import com.puregoldbe.ibms.domain.model.AccountUpsertRequest
 import com.puregoldbe.ibms.domain.model.AttachmentPurpose
+import com.puregoldbe.ibms.domain.model.Store
+import com.puregoldbe.ibms.domain.model.StoreStatus
+import com.puregoldbe.ibms.domain.model.StoreType
 import com.puregoldbe.ibms.domain.model.TransferRecord
 import com.puregoldbe.ibms.domain.port.AccountRepository
 import com.puregoldbe.ibms.domain.port.ActivityRecorder
@@ -40,6 +43,17 @@ private fun account(
     createdAt = Instant.fromEpochSeconds(0),
 )
 
+private fun store(
+    id: String,
+    branchCode: String,
+    name: String,
+    status: StoreStatus = StoreStatus.ACTIVE,
+) = Store(
+    id = id, storeType = StoreType.PUREGOLD, branchCode = branchCode, name = name,
+    status = status, proofOfInstallationId = "inst-1",
+    createdAt = Instant.fromEpochSeconds(0),
+)
+
 class TransferAccountUseCaseSpec : BehaviorSpec({
     isolationMode = IsolationMode.InstancePerLeaf
 
@@ -55,8 +69,18 @@ class TransferAccountUseCaseSpec : BehaviorSpec({
         accounts, stores, transfers, attachments, idempotency, activity, notifications, clock, ImmediateTransactionRunner(),
     )
 
+    // Defaults live in the spec body, not in beforeTest: with InstancePerLeaf the Given
+    // bodies run after this and must be able to override these stubs. A beforeTest would
+    // run last and silently win.
+    every { stores.findById("s1") } returns store("s1", "001", "Main")
+    every { stores.findById("s2") } returns store("s2", "002", "Annex")
+    // The status write is conditional now, so it must be stubbed to report success;
+    // a null return means "another transaction moved this account" -> Conflict.
+    every { accounts.updateStatus(any(), any(), any()) } returns account(status = AccountStatus.TRANSFERRED)
+    every { accounts.findLiveByIdentity(any(), any(), any(), any()) } returns null
+
     Given("an INACTIVE source account") {
-        every { accounts.findById("acc-1") } returns account(status = AccountStatus.INACTIVE)
+        every { accounts.findByIdForUpdate("acc-1") } returns account(status = AccountStatus.INACTIVE)
         every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1", AttachmentPurpose.TRANSFER_PROOF)
 
         When("transferring") {
@@ -68,7 +92,7 @@ class TransferAccountUseCaseSpec : BehaviorSpec({
     }
 
     Given("a TERMINATION_REQUESTED source account") {
-        every { accounts.findById("acc-1") } returns account(status = AccountStatus.TERMINATION_REQUESTED)
+        every { accounts.findByIdForUpdate("acc-1") } returns account(status = AccountStatus.TERMINATION_REQUESTED)
         every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1", AttachmentPurpose.TRANSFER_PROOF)
 
         When("transferring") {
@@ -79,7 +103,7 @@ class TransferAccountUseCaseSpec : BehaviorSpec({
     }
 
     Given("an already-TRANSFERRED source account") {
-        every { accounts.findById("acc-1") } returns account(status = AccountStatus.TRANSFERRED)
+        every { accounts.findByIdForUpdate("acc-1") } returns account(status = AccountStatus.TRANSFERRED)
         every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1", AttachmentPurpose.TRANSFER_PROOF)
 
         When("transferring") {
@@ -90,41 +114,78 @@ class TransferAccountUseCaseSpec : BehaviorSpec({
     }
 
     Given("an ACTIVE account transferred to its current store") {
-        every { accounts.findById("acc-1") } returns account(storeId = "s1")
+        every { accounts.findByIdForUpdate("acc-1") } returns account(storeId = "s1")
 
         When("transferring to the same store") {
             Then("throws Validation and does not touch the account") {
                 shouldThrow<DomainError.Validation> { useCase("acc-1", "s1", listOf("proof-1"), "actor-1") }
-                verify(exactly = 0) { accounts.updateStatus(any(), any()) }
+                verify(exactly = 0) { accounts.updateStatus(any(), any(), any()) }
                 verify(exactly = 0) { accounts.create(any(), any()) }
             }
         }
     }
 
     Given("a destination store that already holds the same identity") {
-        every { accounts.findById("acc-1") } returns account(storeId = "s1")
+        every { accounts.findByIdForUpdate("acc-1") } returns account(storeId = "s1")
         every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1", AttachmentPurpose.TRANSFER_PROOF)
-        every { accounts.existsByIdentity("s2", "p1", "ACC-001", null) } returns true
+        every { accounts.findLiveByIdentity("s2", "p1", "ACC-001", null) } returns account(id = "acc-9", storeId = "s2")
 
         When("transferring") {
             Then("throws Conflict and does not mark the source transferred") {
                 shouldThrow<DomainError.Conflict> { useCase("acc-1", "s2", listOf("proof-1"), "actor-1") }
-                verify(exactly = 0) { accounts.updateStatus(any(), any()) }
+                verify(exactly = 0) { accounts.updateStatus(any(), any(), any()) }
+            }
+        }
+    }
+
+    Given("a destination store holding the same identity in its termination grace") {
+        every { accounts.findByIdForUpdate("acc-1") } returns account(storeId = "s1")
+        every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1", AttachmentPurpose.TRANSFER_PROOF)
+        every { accounts.findLiveByIdentity("s2", "p1", "ACC-001", null) } returns
+            account(id = "acc-9", storeId = "s2", status = AccountStatus.TERMINATION_REQUESTED)
+
+        When("transferring") {
+            Then("the conflict names the pending termination rather than calling it active") {
+                val error = shouldThrow<DomainError.Conflict> {
+                    useCase("acc-1", "s2", listOf("proof-1"), "actor-1")
+                }
+                error.message shouldBe
+                    "an account pending termination (still within its 30-day grace period) with number " +
+                    "ACC-001 and no circuit already exists at Annex (Branch 002)"
+            }
+        }
+    }
+
+    Given("a destination store that is closed") {
+        every { accounts.findByIdForUpdate("acc-1") } returns account(storeId = "s1")
+        every { stores.findById("s2") } returns store("s2", "002", "Annex", StoreStatus.CLOSED)
+        every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1", AttachmentPurpose.TRANSFER_PROOF)
+
+        When("transferring") {
+            Then("throws Conflict rather than manufacturing a floating account") {
+                val error = shouldThrow<DomainError.Conflict> {
+                    useCase("acc-1", "s2", listOf("proof-1"), "actor-1")
+                }
+                error.message shouldBe "cannot transfer to Annex (Branch 002): the store is closed"
+                verify(exactly = 0) { accounts.updateStatus(any(), any(), any()) }
+                verify(exactly = 0) { accounts.create(any(), any()) }
             }
         }
     }
 
     Given("a prorated ACTIVE account transferred to a different store") {
         val slot = slot<AccountUpsertRequest>()
-        every { accounts.findById("acc-1") } returns account(storeId = "s1", isProrated = true)
+        every { accounts.findByIdForUpdate("acc-1") } returns account(storeId = "s1", isProrated = true)
         every { attachments.findById("proof-1") } returns uploadedPdfAttachment("proof-1", AttachmentPurpose.TRANSFER_PROOF)
-        every { accounts.existsByIdentity("s2", "p1", "ACC-001", null) } returns false
+        every { accounts.findLiveByIdentity("s2", "p1", "ACC-001", null) } returns null
         every { accounts.create(capture(slot), any()) } returns account(id = "acc-2", storeId = "s2", isProrated = true)
 
         When("transferring") {
             val moved = useCase("acc-1", "s2", listOf("proof-1"), "actor-1")
             Then("the source is marked TRANSFERRED and the moved account carries isProrated and the new store") {
-                verify(exactly = 1) { accounts.updateStatus("acc-1", AccountStatus.TRANSFERRED) }
+                verify(exactly = 1) {
+                    accounts.updateStatus("acc-1", AccountStatus.TRANSFERRED, AccountStatus.ACTIVE)
+                }
                 moved.id shouldBe "acc-2"
                 slot.captured.isProrated shouldBe true
                 slot.captured.storeId shouldBe "s2"
@@ -134,11 +195,11 @@ class TransferAccountUseCaseSpec : BehaviorSpec({
 
     Given("a transfer carrying three proofs") {
         val proofs = listOf("proof-1", "proof-2", "proof-3")
-        every { accounts.findById("acc-1") } returns account(storeId = "s1")
+        every { accounts.findByIdForUpdate("acc-1") } returns account(storeId = "s1")
         proofs.forEach {
             every { attachments.findById(it) } returns uploadedPdfAttachment(it, AttachmentPurpose.TRANSFER_PROOF)
         }
-        every { accounts.existsByIdentity("s2", "p1", "ACC-001", null) } returns false
+        every { accounts.findLiveByIdentity("s2", "p1", "ACC-001", null) } returns null
         every { accounts.create(any(), any()) } returns account(id = "acc-2", storeId = "s2")
         every { transfers.create(any(), any(), any(), any(), any(), any(), any()) } returns
             TransferRecord(
@@ -168,7 +229,7 @@ class TransferAccountUseCaseSpec : BehaviorSpec({
     }
 
     Given("a transfer carrying four proofs") {
-        every { accounts.findById("acc-1") } returns account(storeId = "s1")
+        every { accounts.findByIdForUpdate("acc-1") } returns account(storeId = "s1")
         (1..4).forEach {
             every { attachments.findById("proof-$it") } returns
                 uploadedPdfAttachment("proof-$it", AttachmentPurpose.TRANSFER_PROOF)
@@ -180,13 +241,13 @@ class TransferAccountUseCaseSpec : BehaviorSpec({
                     useCase("acc-1", "s2", listOf("proof-1", "proof-2", "proof-3", "proof-4"), "actor-1")
                 }
                 error.message shouldBe "at most 3 files may be attached to transfer proof"
-                verify(exactly = 0) { accounts.updateStatus(any(), any()) }
+                verify(exactly = 0) { accounts.updateStatus(any(), any(), any()) }
             }
         }
     }
 
     Given("a transfer whose proof is a subscription proof") {
-        every { accounts.findById("acc-1") } returns account(storeId = "s1")
+        every { accounts.findByIdForUpdate("acc-1") } returns account(storeId = "s1")
         every { attachments.findById("sub-1") } returns
             uploadedPdfAttachment("sub-1", AttachmentPurpose.SUBSCRIPTION_PROOF)
 

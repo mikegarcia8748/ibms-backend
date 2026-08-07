@@ -3,6 +3,9 @@ package com.puregoldbe.ibms.domain.valueobject
 import com.puregoldbe.ibms.domain.error.DomainError
 import java.math.BigDecimal
 import java.math.RoundingMode
+import java.text.DecimalFormat
+import java.text.DecimalFormatSymbols
+import java.util.Locale
 
 /**
  * Money handling for the billing domain.
@@ -35,6 +38,21 @@ object Money {
 
     fun format(value: BigDecimal): String =
         value.setScale(SCALE, RoundingMode.HALF_UP).toPlainString()
+
+    /**
+     * Display-only: `"555335.00"` -> `"₱555,335.00"`. For human-facing surfaces such as
+     * notification emails — **never** for the wire, where [format] is the contract and a
+     * grouped, symbol-prefixed string would break every client parsing it back.
+     *
+     * Falls back to the raw input rather than throwing, unlike [parse]: the only caller
+     * so far renders inside the triggering use case's transaction, where an exception
+     * would roll back a real business write over a formatting problem.
+     */
+    fun display(wire: String?): String {
+        val value = parseOrNull(wire) ?: return wire.orEmpty()
+        val symbols = DecimalFormatSymbols(Locale.US)
+        return "₱" + DecimalFormat("#,##0.00", symbols).format(value)
+    }
 
     fun isPositive(wire: String?): Boolean = parse(wire) > BigDecimal.ZERO
 }

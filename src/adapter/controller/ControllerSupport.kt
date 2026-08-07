@@ -62,6 +62,24 @@ internal fun ApplicationCall.idempotencyContext(userId: String?, canonicalBody: 
         IdempotencyContext(key = key, requestHash = sha256Hex(canonicalBody), userId = userId)
     }
 
+/**
+ * Canonical bodies for the two account operations that accept an `Idempotency-Key`.
+ *
+ * Both start with the ACCOUNT ID, which is the whole point: hashing the payload alone
+ * lets one key replay across different accounts, answering 200 with the wrong account
+ * and never performing the second request.
+ *
+ * They are built from the resolved arguments rather than the DTO so that the two entry
+ * points into a transfer — `POST /accounts/{id}/transfer` and `POST /transfers`, whose
+ * request shapes differ — produce the SAME hash for the same logical operation. A retry
+ * that switches endpoints still dedupes instead of colliding as a 409.
+ */
+internal fun transferCanonicalBody(accountId: String, newStoreId: String, proofIds: List<String>): String =
+    "account.transfer:$accountId:$newStoreId:${proofIds.joinToString(",")}"
+
+internal fun deactivateCanonicalBody(accountId: String, proofIds: List<String>): String =
+    "account.deactivate:$accountId:${proofIds.joinToString(",")}"
+
 private fun sha256Hex(input: String): String =
     java.security.MessageDigest.getInstance("SHA-256")
         .digest(input.toByteArray()).joinToString("") { "%02x".format(it) }

@@ -171,6 +171,21 @@ class DashboardAccountsSpec : BehaviorSpec({
                 }
             }
         }
+
+        // The archive is the one dashboard route open to secretaries: they file the
+        // deactivations, so they need to see the accounts those deactivations retired.
+        // Its sibling `/dashboard/accounts` stays MANAGER/FINANCE (asserted above).
+        When("GET /dashboard/archived-accounts is called by a secretary") {
+            Then("it returns 200") {
+                testApplication {
+                    application { testModule() }
+                    val secretaryToken = signIn(UserRole.SECRETARY).token
+                    client.get("/dashboard/archived-accounts") {
+                        header(HttpHeaders.Authorization, "Bearer $secretaryToken")
+                    }.status shouldBe HttpStatusCode.OK
+                }
+            }
+        }
     }
 
     Given("a closed store") {

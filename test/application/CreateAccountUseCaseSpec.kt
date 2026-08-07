@@ -71,7 +71,7 @@ class CreateAccountUseCaseSpec : BehaviorSpec({
             status = StoreStatus.ACTIVE, proofOfInstallationId = "inst-1",
             createdAt = Instant.fromEpochSeconds(0),
         )
-        every { accounts.existsByIdentity(any(), any(), any(), any()) } returns false
+        every { accounts.findLiveByIdentity(any(), any(), any(), any()) } returns null
         every { accounts.create(any(), any()) } returns created()
         (1..4).forEach {
             every { attachments.findById("proof-$it") } returns

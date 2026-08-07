@@ -37,13 +37,31 @@ class ExpireGracePeriodAccountsUseCaseSpec : BehaviorSpec({
         val expired = terminationRequested("exp", Instant.parse("2026-06-25T00:00:00Z"))
         // The DB-side findExpiredGrace only returns accounts past their grace period
         every { accounts.findExpiredGrace(any()) } returns listOf(expired)
+        every { accounts.updateStatus(any(), any(), any()) } returns expired.copy(status = AccountStatus.INACTIVE)
 
         When("running the job") {
             val count = useCase()
             Then("only the expired account is moved to inactive") {
                 count shouldBe 1
                 verify(exactly = 1) { accounts.findExpiredGrace(any()) }
-                verify(exactly = 1) { accounts.updateStatus("exp", AccountStatus.INACTIVE) }
+                verify(exactly = 1) {
+                    accounts.updateStatus("exp", AccountStatus.INACTIVE, AccountStatus.TERMINATION_REQUESTED)
+                }
+            }
+        }
+    }
+
+    Given("an account whose deactivation was cancelled between the scan and the write") {
+        val expired = terminationRequested("exp", Instant.parse("2026-06-25T00:00:00Z"))
+        every { accounts.findExpiredGrace(any()) } returns listOf(expired)
+        // The conditional update matches no row: the account is ACTIVE again.
+        every { accounts.updateStatus(any(), any(), any()) } returns null
+
+        When("running the job") {
+            val count = useCase()
+            Then("it is neither counted nor notified about") {
+                count shouldBe 0
+                verify(exactly = 0) { notifications.enqueue(any(), any()) }
             }
         }
     }
