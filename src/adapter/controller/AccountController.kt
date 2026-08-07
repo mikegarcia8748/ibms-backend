@@ -28,8 +28,6 @@ import io.ktor.server.routing.*
 import io.ktor.utils.io.*
 import io.ktor.utils.io.core.*
 import kotlinx.io.readByteArray
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
 
 fun Route.accountRoutes(
     listAccounts: ListAccountsUseCase,
@@ -91,22 +89,28 @@ fun Route.accountRoutes(
             call.ok(bulkImport(bytes, caller.userId, dateOrder), "bulk import completed")
         }
         put("/{id}") {
-            call.authorize(UserRole.SECRETARY, UserRole.FINANCE)
+            val caller = call.authorize(UserRole.SECRETARY, UserRole.FINANCE)
             val req = call.receive<AccountUpsertRequest>()
-            call.ok(updateAccount(call.pathId(), req))
+            call.ok(updateAccount(call.pathId(), req, caller.userId))
         }
+        // Both routes below hash the ACCOUNT ID along with the payload. Without it the
+        // hash covers only the proof set, so the same key replayed against a DIFFERENT
+        // account returns the first account's response and never touches the second one.
         post("/{id}/transfer") {
             val caller = call.authorize(UserRole.SECRETARY)
+            val id = call.pathId()
             val req = call.receive<TransferAccountRequest>()
             val proofIds = PdfProofPolicy.mergeProofIds(req.proofId, req.proofIds)
-            call.created(transferAccount(call.pathId(), req.newStoreId, proofIds, caller.userId))
+            val idem = call.idempotencyContext(caller.userId, transferCanonicalBody(id, req.newStoreId, proofIds))
+            call.created(transferAccount(id, req.newStoreId, proofIds, caller.userId, idem))
         }
         post("/{id}/deactivate") {
             val caller = call.authorize(UserRole.SECRETARY)
+            val id = call.pathId()
             val req = call.receive<DeactivateAccountRequest>()
-            val idem = call.idempotencyContext(caller.userId, Json.encodeToString(req))
             val proofIds = PdfProofPolicy.mergeProofIds(req.proofId, req.proofIds)
-            call.ok(deactivateAccount(call.pathId(), proofIds, caller.userId, idem))
+            val idem = call.idempotencyContext(caller.userId, deactivateCanonicalBody(id, proofIds))
+            call.ok(deactivateAccount(id, proofIds, caller.userId, idem))
         }
         // Every proof ever attached to this account, newest activity first. A plain list,
         // not a CursorPage: an activity carries at most PdfProofPolicy.MAX_PROOFS files.

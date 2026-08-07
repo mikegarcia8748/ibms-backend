@@ -14,8 +14,9 @@ import io.ktor.server.response.*
 import io.ktor.server.routing.*
 
 /**
- * Manager's Dashboard — consolidated read/aggregation endpoints, all gated to
- * MANAGER + FINANCE (SYSADMIN is auto-admitted as global superuser).
+ * Manager's Dashboard — consolidated read/aggregation endpoints, gated to
+ * MANAGER + FINANCE (SYSADMIN is auto-admitted as global superuser). The lone
+ * exception is `/archived-accounts`, which also admits SECRETARY.
  *
  * The summary and the denormalized account listing are dashboard-specific; the
  * billing-history, archive and filtered-export routes are thin aliases that
@@ -68,8 +69,11 @@ fun Route.dashboardRoutes(
         }
 
         // Feature 6a — archived accounts (INACTIVE), with store/provider names.
+        // Wider gate than its sibling routes: SECRETARY is the role that files the
+        // deactivations, so it needs to see where they landed. SYSADMIN is admitted
+        // by `authorize` itself, so the list carries only the non-sysadmin roles.
         get("/archived-accounts") {
-            call.authorize(UserRole.MANAGER, UserRole.FINANCE)
+            call.authorize(UserRole.MANAGER, UserRole.FINANCE, UserRole.SECRETARY)
             val p = call.pageParams()
             call.ok(
                 listDashboardAccounts(

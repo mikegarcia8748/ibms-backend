@@ -64,7 +64,8 @@ Key values and what they control:
 |-------------------------|--------------------------------------------|--------------------------------|
 | `APP_ENV`              | `dev`                                      | Relaxes the fail-closed checks. **Unset means `prod`**, which refuses to boot without real secrets |
 | `APP_PORT`             | `8082`                                     | Port the local JVM binds; 8080 is the compose app container |
-| `APP_URL`              | `http://localhost:8082`                    | Must match `APP_PORT` — presigned attachment links are built from it |
+| `APP_URL`              | `http://localhost:8082`                    | This API's own origin. Must match `APP_PORT` — presigned attachment links are built from it |
+| `WEB_CLIENT_URL`       | `http://localhost:8081`                    | The web client's origin — notification email buttons are built from it. Must differ from `APP_URL` |
 | `DB_URL`               | `jdbc:postgresql://localhost:5432/ibms`    | Centralized dev Postgres from `docker-compose.yml` (shared with the Docker app) |
 | `BCRYPT_COST`          | `4`                                        | Low for dev speed; floors at 10 outside dev |
 | `JWT_SECRET`           | `local-dev-secret-not-for-production`      | Never use outside localhost; rejected outside dev |

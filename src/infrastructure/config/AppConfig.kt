@@ -122,6 +122,13 @@ data class AppConfig(
     val smtp: SmtpConfig?,
     val appUrl: String,
     /**
+     * Public base URL of the web client — the separate front end that users actually
+     * browse. Distinct from [appUrl], which is this API's own origin: notification
+     * emails deep-link a human into a *page*, and every backend route is a JSON
+     * endpoint that would answer a browser with 401. See `DeepLinks`.
+     */
+    val webClientUrl: String,
+    /**
      * Signing key for presigned attachment URLs. Separate from [JwtConfig.secret] so a
      * token minted for one purpose can never verify as the other, and so rotating the
      * JWT secret doesn't invalidate in-flight uploads as an undocumented side effect.
@@ -147,6 +154,21 @@ data class AppConfig(
             if (presignSecret == jwt.secret) {
                 add("PRESIGN_SECRET: must not equal JWT_SECRET — the two sign different token types")
             }
+            // Equality, deliberately — not host equality. One host serving the client at
+            // /app and the API at / is a legitimate reverse-proxy layout; the same *base*
+            // for both is the mistake, because it points every email button at a JSON route.
+            if (webClientUrl.trimEnd('/').equals(appUrl.trimEnd('/'), ignoreCase = true)) {
+                add(
+                    "WEB_CLIENT_URL: must not equal APP_URL — APP_URL is this API's own origin, " +
+                        "and notification links built from it open a JSON route, not a page",
+                )
+            }
+            // Ktor's CORSConfig.allowHost rejects a scheme outright, so a scheme here
+            // would otherwise surface as an IllegalArgumentException from deep inside
+            // plugin installation, long after this report would have named the key.
+            corsAllowedHosts.filter { "://" in it }.forEach {
+                add("CORS_ALLOWED_HOSTS: \"$it\" must be a bare host[:port] — the scheme is not part of the entry")
+            }
             if (emailDelivery == EmailDelivery.SMTP && smtp == null) {
                 add("EMAIL_DELIVERY=smtp requires SMTP_HOST")
             }
@@ -157,7 +179,46 @@ data class AppConfig(
         if (problems.isNotEmpty()) throw ConfigException(problems, appEnv.name.lowercase())
     }
 
+    /**
+     * Warns when [webClientUrl]'s host is not one CORS admits — a deploy where email
+     * links land on an origin the browser then can't call the API from. A warning and
+     * not a [requireCoherent] problem because the pairing is a strong convention, not
+     * an invariant: a client can legitimately be proxied so its API calls are
+     * same-origin and never preflight at all.
+     *
+     * Null when there is nothing to say, including when the CORS list is empty (dev's
+     * any-host path, where every origin is already admitted).
+     */
+    fun webClientCorsWarning(): String? {
+        if (corsAllowedHosts.isEmpty()) return null
+        val client = hostPort(webClientUrl) ?: return null
+        val allowed = corsAllowedHosts.map { hostPort(it) }
+        if (client in allowed) return null
+        return "[security] WEB_CLIENT_URL host \"$client\" is not in CORS_ALLOWED_HOSTS " +
+            "(${corsAllowedHosts.joinToString(",")}) — notification links will open an origin " +
+            "the browser cannot call this API from."
+    }
+
     companion object {
+        /**
+         * `host[:port]` from either form the two keys are written in: CORS entries are
+         * bare hosts, [webClientUrl] carries a scheme and possibly a path. The scheme's
+         * default port is dropped so `https://x` and `x:443` compare equal.
+         */
+        private fun hostPort(value: String): String? {
+            val scheme = value.substringBefore("://", missingDelimiterValue = "").lowercase()
+            val authority = value.substringAfter("://").substringBefore('/').substringBefore('?').lowercase()
+            if (authority.isEmpty()) return null
+            // A CORS entry carries no scheme, so which default port it implies is
+            // unknowable — strip either. Ktor admits a bare host on both schemes anyway.
+            val defaultPorts = when (scheme) {
+                "https" -> listOf(":443")
+                "http" -> listOf(":80")
+                else -> listOf(":443", ":80")
+            }
+            return defaultPorts.fold(authority) { acc, port -> acc.removeSuffix(port) }
+        }
+
         /**
          * Reads and validates the whole environment in one pass.
          *
@@ -203,6 +264,24 @@ data class AppConfig(
                 check(
                     appEnv != AppEnv.PROD || appUrl.startsWith("https://"),
                     "APP_URL: must be https:// when APP_ENV=prod, got \"$appUrl\"",
+                )
+            }
+
+            // The front end's origin, not this API's. Read on both branches on purpose:
+            // ConfigKeysSpec discovers the key set by running fromEnv under APP_ENV=dev,
+            // so a key consulted only when hardened would look undocumented to it.
+            val webClientUrl =
+                if (hardened) required("WEB_CLIENT_URL", "the public base URL of the web client that notification links open")
+                else string("WEB_CLIENT_URL", "http://localhost:8081")
+            if (hardened && webClientUrl != null) {
+                check(
+                    !webClientUrl.contains("localhost"),
+                    "WEB_CLIENT_URL: must be the public base URL of the web client, not localhost " +
+                        "(notification email links are built from it)",
+                )
+                check(
+                    appEnv != AppEnv.PROD || webClientUrl.startsWith("https://"),
+                    "WEB_CLIENT_URL: must be https:// when APP_ENV=prod, got \"$webClientUrl\"",
                 )
             }
 
@@ -281,6 +360,7 @@ data class AppConfig(
                     emailDelivery = emailDelivery ?: EmailDelivery.LOG,
                     smtp = smtp,
                     appUrl = appUrl ?: ConfigReader.PLACEHOLDER,
+                    webClientUrl = webClientUrl ?: ConfigReader.PLACEHOLDER,
                     presignSecret = raw("PRESIGN_SECRET")
                         ?: derivePresignSecret(jwtSecret ?: ConfigReader.PLACEHOLDER),
                 )

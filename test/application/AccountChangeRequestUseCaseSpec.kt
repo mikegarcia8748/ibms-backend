@@ -197,7 +197,7 @@ class AccountChangeRequestUseCaseSpec : BehaviorSpec({
         )
         every { requests.findById("req-1") } returns req
         every { accounts.findById("acc-1") } returns account
-        every { accounts.existsByIdentity(any(), "prov-1", "NEW-NUM", any()) } returns false
+        every { accounts.findLiveByIdentity(any(), "prov-1", "NEW-NUM", any()) } returns null
         val updateSlot = slot<AccountUpsertRequest>()
         every { accounts.update(any(), capture(updateSlot)) } returns account
         every { requests.approve("req-1", "mgr-1", any()) } returns
@@ -223,7 +223,8 @@ class AccountChangeRequestUseCaseSpec : BehaviorSpec({
         val account = activeAccount(accountNumber = "ACC-001", providerId = "prov-1")
         every { requests.findById("req-1") } returns req
         every { accounts.findById("acc-1") } returns account
-        every { accounts.existsByIdentity(any(), "prov-1", "DUP-NUM", any()) } returns true
+        every { accounts.findLiveByIdentity(any(), "prov-1", "DUP-NUM", any()) } returns
+            activeAccount(id = "acc-other", accountNumber = "DUP-NUM", providerId = "prov-1")
         When("approving with a conflicting account number") {
             Then("a Conflict is thrown") {
                 shouldThrow<DomainError.Conflict> {

@@ -32,6 +32,7 @@ class AppConfigSpec : BehaviorSpec({
         "DB_PASSWORD" to "a-real-database-password",
         "CORS_ALLOWED_HOSTS" to "client.example.com",
         "APP_URL" to "https://ibms.example.com",
+        "WEB_CLIENT_URL" to "https://client.example.com",
         "EMAIL_DELIVERY" to "log",
         "BOOTSTRAP_ADMIN_USERNAME" to "mikepg",
         "BOOTSTRAP_ADMIN_PASSWORD" to "One-Time-Adm1n-Pw",
@@ -62,6 +63,7 @@ class AppConfigSpec : BehaviorSpec({
                     "DB_PASSWORD",
                     "CORS_ALLOWED_HOSTS",
                     "APP_URL",
+                    "WEB_CLIENT_URL",
                     "EMAIL_DELIVERY",
                     "BOOTSTRAP_ADMIN_USERNAME",
                 ).forEach { key -> message shouldContain key }
@@ -233,6 +235,70 @@ class AppConfigSpec : BehaviorSpec({
         }
     }
 
+    Given("WEB_CLIENT_URL in prod") {
+        When("it points at localhost") {
+            Then("it is rejected — notification links are built from it") {
+                val ex = shouldThrow<ConfigException> {
+                    AppConfig.fromEnv(prod("WEB_CLIENT_URL" to "http://localhost:8081"))
+                }
+                ex.message!! shouldContain "WEB_CLIENT_URL"
+            }
+        }
+        When("it is plaintext http") {
+            Then("it is rejected") {
+                shouldThrow<ConfigException> { AppConfig.fromEnv(prod("WEB_CLIENT_URL" to "http://client.example.com")) }
+            }
+        }
+        When("it is unset in dev") {
+            Then("it falls back to the local web client, not the API's own port") {
+                val cfg = AppConfig.fromEnv(dev())
+                cfg.webClientUrl shouldBe "http://localhost:8081"
+                cfg.webClientUrl shouldNotBe cfg.appUrl
+            }
+        }
+    }
+
+    Given("CORS_ALLOWED_HOSTS written with a scheme") {
+        When("reading config") {
+            // Ktor's allowHost rejects a scheme outright, so left unchecked this surfaces
+            // as an IllegalArgumentException from inside plugin installation instead.
+            Then("it is named as a config problem rather than crashing the boot later") {
+                val ex = shouldThrow<ConfigException> {
+                    AppConfig.fromEnv(prod("CORS_ALLOWED_HOSTS" to "https://client.example.com")).requireCoherent()
+                }
+                ex.message!! shouldContain "CORS_ALLOWED_HOSTS"
+                ex.message!! shouldContain "bare host"
+            }
+        }
+    }
+
+    Given("the web client's origin against the CORS allow-list") {
+        When("the client's host is admitted") {
+            Then("there is nothing to warn about") {
+                AppConfig.fromEnv(prod()).webClientCorsWarning() shouldBe null
+            }
+        }
+        When("the CORS list is empty") {
+            Then("there is nothing to warn about — dev admits any origin") {
+                AppConfig.fromEnv(dev()).webClientCorsWarning() shouldBe null
+            }
+        }
+        When("the default port is written on one side only") {
+            Then("they still compare equal") {
+                AppConfig.fromEnv(prod("CORS_ALLOWED_HOSTS" to "client.example.com:443"))
+                    .webClientCorsWarning() shouldBe null
+            }
+        }
+        When("the client's host is not admitted") {
+            Then("it warns, because the landed page could not call this API") {
+                val warning = AppConfig.fromEnv(prod("CORS_ALLOWED_HOSTS" to "other.example.com"))
+                    .webClientCorsWarning()
+                warning!! shouldContain "client.example.com"
+                warning shouldContain "CORS_ALLOWED_HOSTS"
+            }
+        }
+    }
+
     Given("email delivery") {
         When("EMAIL_DELIVERY is unset in prod") {
             Then("there is no default — dropping every notification must be deliberate") {
@@ -361,6 +427,18 @@ class AppConfigSpec : BehaviorSpec({
                     cfg.copy(presignSecret = cfg.jwt.secret).requireCoherent()
                 }
                 ex.message!! shouldContain "PRESIGN_SECRET"
+            }
+        }
+        // The mistake this catches is the natural one: an operator who reads "the public
+        // base URL" twice and sets both keys to the same value, pointing every email
+        // button at a JSON route that answers a browser with 401.
+        When("the web client URL equals the API's own URL") {
+            Then("requireCoherent refuses it, trailing slash notwithstanding") {
+                val cfg = AppConfig.fromEnv(prod())
+                val ex = shouldThrow<ConfigException> {
+                    cfg.copy(webClientUrl = cfg.appUrl + "/").requireCoherent()
+                }
+                ex.message!! shouldContain "WEB_CLIENT_URL"
             }
         }
         When("it is coherent") {

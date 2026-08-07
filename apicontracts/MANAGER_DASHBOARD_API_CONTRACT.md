@@ -10,7 +10,9 @@ plus the already-shipped filtered Excel export.
 
 All dashboard endpoints are **read-only** and gated to **MANAGER** and **FINANCE**
 (SYSADMIN is auto-admitted as a global superuser). They live under the base path
-`/dashboard`.
+`/dashboard`. The one exception is `/dashboard/archived-accounts`, which also
+admits **SECRETARY** — see
+[ARCHIVED_ACCOUNTS_API_CONTRACT.md](ARCHIVED_ACCOUNTS_API_CONTRACT.md).
 
 ---
 
@@ -21,7 +23,7 @@ All dashboard endpoints are **read-only** and gated to **MANAGER** and **FINANCE
 | GET | `/dashboard/summary` | MANAGER, FINANCE | 1 & 2 | Total active accounts + MRC, per-status counts, per-ISP breakdown |
 | GET | `/dashboard/accounts` | MANAGER, FINANCE | 3 | Accounts with associated store (denormalized, paginated) |
 | GET | `/dashboard/billing-history` | MANAGER, FINANCE | 5 | Billing history / compiled top sheets (non-draft) |
-| GET | `/dashboard/archived-accounts` | MANAGER, FINANCE | 6a | Archived (inactive) accounts, with store names |
+| GET | `/dashboard/archived-accounts` | MANAGER, FINANCE, **SECRETARY** | 6a | Archived (inactive) accounts, with store names |
 | GET | `/dashboard/archived-stores` | MANAGER, FINANCE | 6b | Archived (closed) stores |
 | GET | `/dashboard/exports/accounts.xlsx` | MANAGER, FINANCE | 4 | Excel export filtered by ISP + status (alias of `/exports/accounts.xlsx`) |
 
@@ -63,7 +65,7 @@ error), so validate values client-side. Account statuses: `active`,
 | Status | When |
 |--------|------|
 | `401 Unauthorized` | Missing/invalid bearer token. |
-| `403 Forbidden` | Authenticated but not MANAGER/FINANCE/SYSADMIN. |
+| `403 Forbidden` | Authenticated but not MANAGER/FINANCE/SYSADMIN — except on `/dashboard/archived-accounts`, which also allows SECRETARY. |
 | `400 Bad Request` | Malformed/unknown `cursor` (`"invalid cursor"`). |
 
 ---
@@ -232,6 +234,11 @@ Line items for a given top sheet are fetched via `GET /topsheets/{id}/lines`
 Feature 6a. Accounts whose status is `inactive` (the terminal archived state after
 grace-period expiry). Same denormalized shape as `/dashboard/accounts`.
 
+> **Canonical spec:** [ARCHIVED_ACCOUNTS_API_CONTRACT.md](ARCHIVED_ACCOUNTS_API_CONTRACT.md).
+> Unlike its sibling routes, this endpoint is open to **MANAGER, FINANCE and
+> SECRETARY** — secretaries file the deactivations, so they need to see the
+> accounts those deactivations retired.
+
 ### Request
 
 | Param | Type | Description |
@@ -349,6 +356,9 @@ The front end may call either.
 
 ## Changelog
 
+- **2026-08-05** — `/dashboard/archived-accounts` role gate widened to include
+  **SECRETARY**; filtering unchanged (`inactive` only). Endpoint spec extracted to
+  [ARCHIVED_ACCOUNTS_API_CONTRACT.md](ARCHIVED_ACCOUNTS_API_CONTRACT.md).
 - **2026-07-27** — Initial draft: `/dashboard/summary`, `/dashboard/accounts`,
   `/dashboard/billing-history`, `/dashboard/archived-accounts`,
   `/dashboard/archived-stores`, `/dashboard/exports/accounts.xlsx`.

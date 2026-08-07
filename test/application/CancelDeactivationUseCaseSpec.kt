@@ -58,7 +58,7 @@ class CancelDeactivationUseCaseSpec : BehaviorSpec({
     val useCase = CancelDeactivationUseCase(accounts, activity, ImmediateTransactionRunner())
 
     Given("an account in TERMINATION_REQUESTED") {
-        every { accounts.findById("acc-1") } returns terminationRequestedAccount()
+        every { accounts.findByIdForUpdate("acc-1") } returns terminationRequestedAccount()
         every { accounts.cancelTerminationRequested("acc-1") } returns cancelledResult()
 
         When("cancelling with reason") {
@@ -66,11 +66,31 @@ class CancelDeactivationUseCaseSpec : BehaviorSpec({
             Then("status reverts to ACTIVE") {
                 result.status shouldBe AccountStatus.ACTIVE
             }
+            Then("the read takes a row lock, so the expiry job cannot archive it mid-cancel") {
+                verify(exactly = 1) { accounts.findByIdForUpdate("acc-1") }
+                verify(exactly = 0) { accounts.findById(any()) }
+            }
+        }
+    }
+
+    Given("the grace-expiry job winning the race between the guard and the write") {
+        every { accounts.findByIdForUpdate("acc-1") } returns terminationRequestedAccount()
+        // The conditional write matched no row: the account is already inactive.
+        every { accounts.cancelTerminationRequested("acc-1") } returns null
+
+        When("cancelling") {
+            Then("throws Conflict rather than reporting a cancellation that did not happen") {
+                val error = shouldThrow<DomainError.Conflict> {
+                    useCase("acc-1", "Customer changed their mind", "actor-1")
+                }
+                error.message shouldBe
+                    "account acc-1 is no longer in termination_requested status; cancellation was not applied"
+            }
         }
     }
 
     Given("an account in TERMINATION_REQUESTED for graceEndDate clearing") {
-        every { accounts.findById("acc-1") } returns terminationRequestedAccount()
+        every { accounts.findByIdForUpdate("acc-1") } returns terminationRequestedAccount()
         every { accounts.cancelTerminationRequested("acc-1") } returns cancelledResult()
 
         When("cancelling") {
@@ -83,7 +103,7 @@ class CancelDeactivationUseCaseSpec : BehaviorSpec({
     }
 
     Given("an ACTIVE account") {
-        every { accounts.findById("acc-1") } returns activeAccount()
+        every { accounts.findByIdForUpdate("acc-1") } returns activeAccount()
 
         When("cancelling") {
             Then("throws Conflict") {
@@ -95,7 +115,7 @@ class CancelDeactivationUseCaseSpec : BehaviorSpec({
     }
 
     Given("an INACTIVE account") {
-        every { accounts.findById("acc-1") } returns inactiveAccount()
+        every { accounts.findByIdForUpdate("acc-1") } returns inactiveAccount()
 
         When("cancelling") {
             Then("throws Conflict") {
@@ -107,7 +127,7 @@ class CancelDeactivationUseCaseSpec : BehaviorSpec({
     }
 
     Given("valid cancellation with activity recording") {
-        every { accounts.findById("acc-1") } returns terminationRequestedAccount()
+        every { accounts.findByIdForUpdate("acc-1") } returns terminationRequestedAccount()
         every { accounts.cancelTerminationRequested("acc-1") } returns cancelledResult()
 
         When("cancelling") {
@@ -121,7 +141,7 @@ class CancelDeactivationUseCaseSpec : BehaviorSpec({
     }
 
     Given("a termination-requested account with a blank reason") {
-        every { accounts.findById("acc-1") } returns terminationRequestedAccount()
+        every { accounts.findByIdForUpdate("acc-1") } returns terminationRequestedAccount()
 
         When("cancelling with a blank reason") {
             Then("throws Validation and does not cancel") {
@@ -134,7 +154,7 @@ class CancelDeactivationUseCaseSpec : BehaviorSpec({
     }
 
     Given("account not found") {
-        every { accounts.findById("missing") } returns null
+        every { accounts.findByIdForUpdate("missing") } returns null
 
         When("cancelling") {
             Then("throws NotFound") {

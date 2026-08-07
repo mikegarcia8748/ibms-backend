@@ -128,8 +128,9 @@ With `APP_ENV=prod` the app **validates everything at startup and refuses to boo
 | `BOOTSTRAP_ADMIN_PASSWORD` | a strong one-time password | ✅ unless `BOOTSTRAP_ADMIN_AUTOGENERATE_PASSWORD=true` |
 | `BOOTSTRAP_ADMIN_AUTOGENERATE_PASSWORD` | `true` to generate one and log it once instead | prefer setting the password — the generated one lands in the service log |
 | `STORAGE_LOCAL_DIR` | `C:\ibms\storage` | |
-| `CORS_ALLOWED_HOSTS` | your Wasm client origin(s), comma-separated — `host[:port]`, e.g. `ibms-client.your-domain.example` | ✅ (empty no longer falls back to any-host — it fails the boot) |
-| `APP_URL` | `https://ibms.your-domain.example` | ✅ (must be https and not localhost) |
+| `CORS_ALLOWED_HOSTS` | your Wasm client origin(s), comma-separated — `host[:port]` (e.g. `ibms-client.your-domain.example`), or a full origin such as `https://ibms-client.your-domain.example` | ✅ (empty no longer falls back to any-host — it fails the boot) |
+| `APP_URL` | `https://ibms.your-domain.example` | ✅ (must be https and not localhost) — **this API's own origin** |
+| `WEB_CLIENT_URL` | `https://ibms-client.your-domain.example` | ✅ (https, not localhost, and **must differ from `APP_URL`**) — the web client's origin, which notification email buttons open |
 | `EMAIL_DELIVERY` | `smtp` for real delivery, `log` to only log | ✅ no default — choose deliberately |
 | `SMTP_HOST` | the org's internal mail relay | ✅ when `EMAIL_DELIVERY=smtp` |
 | `SMTP_PORT` | `587` STARTTLS, `465` implicit TLS, `25` plain | |
@@ -179,6 +180,7 @@ In `C:\ibms\service\`, put `WinSW.NET4.exe` renamed to `ibms.exe`, alongside `ib
   <!-- host[:port]. A bare host allows http and https; prefix a scheme to pin one. -->
   <env name="CORS_ALLOWED_HOSTS" value="ibms-client.your-domain.example"/>
   <env name="APP_URL" value="https://ibms.your-domain.example"/>
+  <env name="WEB_CLIENT_URL" value="https://ibms-client.your-domain.example"/>
 
   <env name="EMAIL_DELIVERY" value="smtp"/>
   <env name="SMTP_HOST" value="mail-relay.your-domain.example"/>
@@ -303,7 +305,8 @@ Keep ~14–30 days and test a restore periodically. **The dumps and attachment c
 - [ ] `ibms` database + role created; `pgcrypto` + `citext` extensions pre-created; schema privileges granted
 - [ ] Temurin **JRE 25** installed (`java -version` → 25)
 - [ ] Fat jar built off-server and copied to `C:\ibms\app`
-- [ ] `JWT_SECRET` and `BOOTSTRAP_ADMIN_PASSWORD` overridden with strong values; `CORS_ALLOWED_HOSTS` set
+- [ ] `JWT_SECRET` and `BOOTSTRAP_ADMIN_PASSWORD` overridden with strong values; `CORS_ALLOWED_HOSTS` set (bare hosts, no scheme)
+- [ ] `WEB_CLIENT_URL` points at the web client, not the API, and its host is in `CORS_ALLOWED_HOSTS` — notification email buttons are built from it
 - [ ] WinSW service installed, `Automatic`, started
 - [ ] First-run Flyway migration succeeded; auth smoke test passed
 - [ ] Caddy TLS in front; only 443/80 open; 5432/8080 localhost-only

@@ -45,6 +45,9 @@ services:
       STORAGE_LOCAL_DIR: /app/storage
       CORS_ALLOWED_HOSTS: ${CORS_ALLOWED_HOSTS:-}
       APP_URL: ${APP_URL:-http://localhost:8080}
+      # The web client's origin, which notification email buttons open. Must differ from
+      # APP_URL — the app refuses to boot otherwise.
+      WEB_CLIENT_URL: ${WEB_CLIENT_URL:-http://localhost:8081}
       # Only consulted on the first boot against an empty database; a no-op once
       # the sysadmin has a password. Blank here means a password is generated and
       # logged exactly once, because AUTOGENERATE defaults on in a dev environment.

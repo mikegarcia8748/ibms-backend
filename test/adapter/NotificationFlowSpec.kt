@@ -17,6 +17,8 @@ import com.puregoldbe.ibms.support.testModule
 import io.kotest.core.spec.style.BehaviorSpec
 import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.string.shouldNotContain
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
@@ -39,6 +41,9 @@ import kotlin.time.Duration.Companion.days
  * it never collides with the shared Testcontainers database.
  */
 class NotificationFlowSpec : BehaviorSpec({
+
+    /** The slice of an `email_log` row this spec asserts on. */
+    data class EmailRow(val toEmails: List<String>, val status: String, val bodyHtml: String)
 
     fun String.asJson(): JsonObject = Json.parseToJsonElement(this).jsonObject
     val users = ExposedUserRepository()
@@ -100,16 +105,31 @@ class NotificationFlowSpec : BehaviorSpec({
                     )
                 }
                 store.status shouldBe HttpStatusCode.Created
+                val storeId = store.bodyAsText().asJson()["data"]!!.jsonObject["id"]!!.jsonPrimitive.content
 
                 // an email_log row addressed to the recipient was enqueued
-                fun myRow(): Triple<String, List<String>, String>? = transaction(PostgresTestDb.database) {
+                fun myRow(): EmailRow? = transaction(PostgresTestDb.database) {
                     EmailLog.selectAll().where { EmailLog.type eq "store.created" }
-                        .map { Triple(it[EmailLog.id].value.toString(), it[EmailLog.toEmails], it[EmailLog.status]) }
-                        .firstOrNull { recipientEmail in it.second }
+                        .map {
+                            EmailRow(
+                                it[EmailLog.toEmails],
+                                it[EmailLog.status],
+                                it[EmailLog.bodyHtml].orEmpty(),
+                            )
+                        }
+                        .firstOrNull { recipientEmail in it.toEmails }
                 }
                 val enqueued = myRow()
                 (enqueued != null) shouldBe true
-                enqueued!!.second shouldContain recipientEmail
+                enqueued!!.toEmails shouldContain recipientEmail
+
+                // The one end-to-end pin on the deep link: the button must resolve
+                // against the web client, never this API — a link built from appUrl
+                // reaches a JSON route and answers a browser with 401.
+                enqueued.bodyHtml shouldContain "href=\"http://localhost:8081/stores/$storeId\""
+                enqueued.bodyHtml shouldNotContain "localhost:8080"
+                // ...and the sysadmin who created the store is named on it.
+                enqueued.bodyHtml shouldContain "Performed by Spec sysadmin"
 
                 // drain the outbox with the simulated gateway; the row reaches a terminal state
                 DispatchQueuedEmailsUseCase(
@@ -119,7 +139,7 @@ class NotificationFlowSpec : BehaviorSpec({
                     ExposedTransactionRunner(PostgresTestDb.database),
                     batchSize = 5000,
                 )()
-                myRow()!!.third shouldBe "simulated"
+                myRow()!!.status shouldBe "simulated"
             }
         }
     }

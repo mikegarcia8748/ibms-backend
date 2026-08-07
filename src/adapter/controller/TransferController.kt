@@ -9,8 +9,6 @@ import com.puregoldbe.ibms.domain.model.UserRole
 import com.puregoldbe.ibms.domain.service.PdfProofPolicy
 import io.ktor.server.request.*
 import io.ktor.server.routing.*
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
 
 /**
  * Transfers as a top-level group. `POST /transfers` reuses the same
@@ -31,8 +29,11 @@ fun Route.transferRoutes(
         post {
             val caller = call.authorize(UserRole.SECRETARY)
             val req = call.receive<TransferCreateRequest>()
-            val idem = call.idempotencyContext(caller.userId, Json.encodeToString(req))
             val proofIds = PdfProofPolicy.mergeProofIds(req.proofId, req.proofIds)
+            val idem = call.idempotencyContext(
+                caller.userId,
+                transferCanonicalBody(req.accountId, req.newStoreId, proofIds),
+            )
             call.created(transferAccount(req.accountId, req.newStoreId, proofIds, caller.userId, idem))
         }
         get("/{id}/attachments") {

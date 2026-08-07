@@ -27,6 +27,7 @@ import com.puregoldbe.ibms.domain.model.ProviderAccountSummary
 import com.puregoldbe.ibms.domain.model.StoreStatus
 import com.puregoldbe.ibms.domain.port.AccountAggregate
 import com.puregoldbe.ibms.domain.port.AccountRepository
+import com.puregoldbe.ibms.domain.service.AccountIdentityPolicy
 import com.puregoldbe.ibms.domain.service.GracePeriodPolicy
 import com.puregoldbe.ibms.domain.valueobject.toMoney
 import com.puregoldbe.ibms.domain.valueobject.toMoneyString
@@ -41,6 +42,16 @@ class ExposedAccountRepository : AccountRepository {
     override fun findById(id: String): Account? {
         val uuid = id.toUuidOrNull() ?: return null
         return Accounts.selectAll().where { Accounts.id eq uuid }
+            .map { it.toAccount(proofIdsFor(uuid)) }
+            .singleOrNull()
+    }
+
+    override fun findByIdForUpdate(id: String): Account? {
+        val uuid = id.toUuidOrNull() ?: return null
+        // The lock is taken on the accounts row itself; proofIdsFor runs a second query
+        // that deliberately stays unlocked (proof links are append-only).
+        return Accounts.selectAll().where { Accounts.id eq uuid }
+            .forUpdate()
             .map { it.toAccount(proofIdsFor(uuid)) }
             .singleOrNull()
     }
@@ -72,41 +83,49 @@ class ExposedAccountRepository : AccountRepository {
             .toCursorPage(limit) { it.id }
     }
 
-    /** The single predicate behind both [existsByIdentity] and [findByIdentity]. */
-    private fun identityOf(storeId: String, providerId: String, accountNumber: String, circuitId: String?): Op<Boolean> {
-        val core = (Accounts.storeId eq storeId.toUuid()) and
-            (Accounts.providerId eq providerId.toUuid()) and
-            (Accounts.accountNumber eq accountNumber) and
-            (Accounts.status notInList listOf(AccountStatus.TRANSFERRED, AccountStatus.INACTIVE))
-        // Mirror the DB's COALESCE(circuit_id,'') unique index: a null/blank
-        // circuit matches rows whose circuit is null or empty.
-        return if (circuitId.isNullOrBlank()) {
-            core and (Accounts.circuitId.isNull() or (Accounts.circuitId eq ""))
-        } else {
-            core and (Accounts.circuitId eq circuitId)
-        }
-    }
-
-    override fun existsByIdentity(storeId: String, providerId: String, accountNumber: String, circuitId: String?): Boolean =
-        Accounts.selectAll()
-            .where { identityOf(storeId, providerId, accountNumber, circuitId) }
-            .limit(1)
-            .any()
-
-    override fun findByIdentity(storeId: String, providerId: String, accountNumber: String, circuitId: String?): Account? =
-        Accounts.selectAll()
-            .where { identityOf(storeId, providerId, accountNumber, circuitId) }
-            // The identity is backed by uq_account_identity_active, so at most one row can
-            // match — but order for determinism if a legacy row ever slipped past it.
+    override fun findLiveByIdentity(
+        storeId: String,
+        providerId: String,
+        accountNumber: String,
+        circuitId: String?,
+    ): Account? {
+        val number = AccountIdentityPolicy.normalizeAccountNumber(accountNumber)
+        val circuit = AccountIdentityPolicy.normalizeCircuitId(circuitId)
+        return Accounts.selectAll()
+            .where {
+                val core = (Accounts.storeId eq storeId.toUuid()) and
+                    (Accounts.providerId eq providerId.toUuid()) and
+                    // Case-insensitive on purpose, unlike the DB index: the guard is meant
+                    // to be strictly stricter than the constraint, so "ACC-1" and "acc-1"
+                    // cannot both go live for one circuit. See AccountIdentityPolicy.
+                    (Accounts.accountNumber.lowerCase() eq number.lowercase()) and
+                    (Accounts.status notInList listOf(AccountStatus.TRANSFERRED, AccountStatus.INACTIVE))
+                // Mirror the DB's COALESCE(circuit_id,'') unique index: a null/blank
+                // circuit matches rows whose circuit is null or empty. Legacy rows written
+                // before normalization may hold whitespace, so trim on the DB side too.
+                if (circuit == null) {
+                    core and (Accounts.circuitId.isNull() or (Accounts.circuitId.trim() eq ""))
+                } else {
+                    core and (Accounts.circuitId.trim().lowerCase() eq circuit.lowercase())
+                }
+            }
+            // Ordered for determinism: the identity is unique among live rows by
+            // index, so at most one row can match — but a legacy pre-normalization
+            // duplicate must resolve to the same row every time it is reported.
             .orderBy(Accounts.createdAt to SortOrder.ASC, Accounts.id to SortOrder.ASC)
-            .limit(1)
-            .map { it.toAccount(proofIdsFor(it[Accounts.id].value)) }
-            .singleOrNull()
+            // firstOrNull rather than singleOrNull so such a duplicate reports the
+            // conflict instead of throwing.
+            .firstOrNull()
+            ?.let { it.toAccount(proofIdsFor(it[Accounts.id].value)) }
+    }
 
     override fun create(input: AccountUpsertRequest, createdBy: String?): Account {
         val newId = Accounts.insertAndGetId { row ->
-            row[Accounts.accountNumber] = input.accountNumber
-            input.circuitId?.let { row[Accounts.circuitId] = it }
+            // Normalized here as well as at the use-case boundary: this is the last gate
+            // before the unique index, and a caller that forgets must not be able to
+            // write a whitespace circuit the identity guard can never match again.
+            row[Accounts.accountNumber] = AccountIdentityPolicy.normalizeAccountNumber(input.accountNumber)
+            AccountIdentityPolicy.normalizeCircuitId(input.circuitId)?.let { row[Accounts.circuitId] = it }
             row[Accounts.providerId] = EntityID(input.providerId.toUuid(), Providers)
             row[Accounts.storeId] = EntityID(input.storeId.toUuid(), Stores)
             input.planName?.let { row[Accounts.planName] = it }
@@ -136,8 +155,8 @@ class ExposedAccountRepository : AccountRepository {
     override fun update(id: String, input: AccountUpsertRequest): Account? {
         val uuid = id.toUuidOrNull() ?: return null
         val updated = Accounts.update({ Accounts.id eq uuid }) { row ->
-            row[Accounts.accountNumber] = input.accountNumber
-            row[Accounts.circuitId] = input.circuitId
+            row[Accounts.accountNumber] = AccountIdentityPolicy.normalizeAccountNumber(input.accountNumber)
+            row[Accounts.circuitId] = AccountIdentityPolicy.normalizeCircuitId(input.circuitId)
             row[Accounts.providerId] = EntityID(input.providerId.toUuid(), Providers)
             row[Accounts.storeId] = EntityID(input.storeId.toUuid(), Stores)
             row[Accounts.planName] = input.planName
@@ -239,15 +258,20 @@ class ExposedAccountRepository : AccountRepository {
             .toCursorPage(limit) { it.id }
     }
 
-    override fun updateStatus(id: String, status: AccountStatus): Account? {
+    // The expected-status predicate below is what makes these writes safe under
+    // concurrency: the UPDATE matches zero rows when another transaction already moved
+    // the account, so the caller gets null (-> 409) instead of overwriting the winner.
+    override fun updateStatus(id: String, status: AccountStatus, expected: AccountStatus): Account? {
         val uuid = id.toUuidOrNull() ?: return null
-        val n = Accounts.update({ Accounts.id eq uuid }) { it[Accounts.status] = status }
+        val n = Accounts.update({ (Accounts.id eq uuid) and (Accounts.status eq expected) }) {
+            it[Accounts.status] = status
+        }
         return if (n == 0) null else findById(id)
     }
 
     override fun markTerminationRequested(id: String, at: kotlinx.datetime.Instant): Account? {
         val uuid = id.toUuidOrNull() ?: return null
-        val n = Accounts.update({ Accounts.id eq uuid }) {
+        val n = Accounts.update({ (Accounts.id eq uuid) and (Accounts.status eq AccountStatus.ACTIVE) }) {
             it[Accounts.status] = AccountStatus.TERMINATION_REQUESTED
             it[Accounts.terminationRequestedAt] = at.jt()
         }
@@ -310,7 +334,9 @@ class ExposedAccountRepository : AccountRepository {
 
     override fun cancelTerminationRequested(id: String): Account? {
         val uuid = id.toUuidOrNull() ?: return null
-        val n = Accounts.update({ Accounts.id eq uuid }) {
+        val n = Accounts.update(
+            { (Accounts.id eq uuid) and (Accounts.status eq AccountStatus.TERMINATION_REQUESTED) },
+        ) {
             it[Accounts.status] = AccountStatus.ACTIVE
             it[Accounts.terminationRequestedAt] = null
         }

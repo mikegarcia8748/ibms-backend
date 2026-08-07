@@ -72,7 +72,7 @@ private fun sampleStore(req: StoreUpsertRequest) = Store(
     createdAt = Instant.fromEpochSeconds(0),
 )
 
-/** An account already in the DB, as findByIdentity would return it. */
+/** An account already in the DB, as findLiveByIdentity would return it. */
 private fun sampleExistingAccount(
     accountNumber: String = "ACC001",
     rate: String = "1500",
@@ -136,7 +136,7 @@ class BulkImportAccountsUseCaseSpec : BehaviorSpec({
     every { providers.create(any(), any()) } answers { sampleProvider(firstArg()) }
     every { stores.findByBranchCode(any()) } returns null
     every { stores.create(capture(storeReq), any()) } answers { sampleStore(firstArg()) }
-    every { accounts.findByIdentity(any(), any(), any(), any()) } returns null
+    every { accounts.findLiveByIdentity(any(), any(), any(), any()) } returns null
     every { accounts.create(capture(accountReq), any()) } answers { sampleAccount(firstArg()) }
     every { accounts.updateRate(any(), any()) } answers { sampleAccount(AccountUpsertRequest(
         accountNumber = "ACC001", providerId = "prov-1", storeId = "store-1",
@@ -443,7 +443,7 @@ class BulkImportAccountsUseCaseSpec : BehaviorSpec({
 
     Given("an account whose identity (store, provider, account no, circuit) already exists at the same rate") {
         // "1500.00" vs the sheet's "1500": equal as money, so nothing should be written.
-        every { accounts.findByIdentity(any(), any(), "ACC001", any()) } returns
+        every { accounts.findLiveByIdentity(any(), any(), "ACC001", any()) } returns
             sampleExistingAccount(accountNumber = "ACC001", rate = "1500.00")
         val bytes = xlsx(rows = listOf(row(accountNo = "ACC001")))
         When("importing") {
@@ -638,7 +638,7 @@ class BulkImportAccountsUseCaseSpec : BehaviorSpec({
             useCase(bytes, "actor")
             Then("it is read without a trailing .0") {
                 accountReq.captured.accountNumber shouldBe "123456"
-                verify { accounts.findByIdentity(any(), any(), "123456", any()) }
+                verify { accounts.findLiveByIdentity(any(), any(), "123456", any()) }
             }
         }
     }
@@ -924,7 +924,7 @@ class BulkImportAccountsUseCaseSpec : BehaviorSpec({
     //  O. Re-import refreshes a changed rate
     // ======================================================================
     Given("an existing account whose Monthly Recurring Amount has changed in the sheet") {
-        every { accounts.findByIdentity(any(), any(), "ACC001", any()) } returns
+        every { accounts.findLiveByIdentity(any(), any(), "ACC001", any()) } returns
             sampleExistingAccount(rate = "1500")
         val bytes = xlsx(rows = listOf(row(mrc = 1800.0)))
         When("importing") {
